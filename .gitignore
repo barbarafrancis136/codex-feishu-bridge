@@ -1,0 +1,45 @@
+# 🔐 敏感文件 - 绝不上传
+
+# API 密钥和凭证
+.env
+.env.api
+.env.local
+*.key
+*.pem
+*.crt
+
+# OpenClaw 敏感配置
+../../openclaw.json
+../../agents/*/agent/auth-profiles.json
+../../.env.api
+
+# 临时文件
+*.tmp
+*.log
+*.bak
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Node.js
+node_modules/
+npm-debug.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志文件（可选，根据需要）
+# ../../memory/logs/*.log
