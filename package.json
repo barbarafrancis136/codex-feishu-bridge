@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "A focused Feishu/Lark bridge for local Codex.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jiao-Joe/codex-feishu-bridge.git"
+  },
+  "homepage": "https://github.com/Jiao-Joe/codex-feishu-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/Jiao-Joe/codex-feishu-bridge/issues"
+  },
   "type": "commonjs",
   "main": "src/index.js",
   "keywords": [

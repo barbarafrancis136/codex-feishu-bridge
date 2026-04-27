@@ -40,6 +40,10 @@ const PATTERNS = [
   { name: "aws-access-key", re: /AKIA[0-9A-Z]{16}/g },
 ];
 
+const ALLOWED_PUBLIC_TERMS = [
+  "Jiao-Joe",
+];
+
 function walk(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
@@ -69,7 +73,10 @@ function walk(dir) {
 
 function scanFile(relPath) {
   const fullPath = path.join(ROOT, relPath);
-  const text = fs.readFileSync(fullPath, "utf8");
+  let text = fs.readFileSync(fullPath, "utf8");
+  for (const term of ALLOWED_PUBLIC_TERMS) {
+    text = text.replaceAll(term, "[allowed-public-owner]");
+  }
   const findings = [];
   for (const pattern of PATTERNS) {
     pattern.re.lastIndex = 0;
