@@ -45,6 +45,7 @@ const approvalRuntime = require("../domain/approval/approval-service");
 const runtimeState = require("../domain/session/binding-context");
 const threadRuntime = require("../domain/thread/thread-service");
 const workspaceRuntime = require("../domain/workspace/workspace-service");
+const runtimeExtensions = require("./runtime-extensions");
 const eventsRuntime = require("./codex-event-service");
 const approvalPolicyRuntime = require("../domain/approval/approval-policy");
 const appDispatcher = require("./dispatcher");
@@ -56,6 +57,7 @@ const CODEX_APP_SERVER_PROFILES = Object.freeze({
   main: "",
   default: "",
   openai: "",
+  ...runtimeExtensions.codexProfiles.profiles,
 });
 
 class FeishuBotRuntime {
@@ -97,6 +99,7 @@ class FeishuBotRuntime {
     this.inFlightApprovalRequestKeys = new Set();
     this.resumedThreadIds = new Set();
     this.staleTurnWatchdog = null;
+    this.extensions = runtimeExtensions;
     this.codex.onMessage((message) => appDispatcher.onCodexMessage(this, message));
   }
 
@@ -315,13 +318,13 @@ class FeishuBotRuntime {
     if (!rawAlias) {
       return {
         ok: false,
-        message: `当前 Codex 运行档：${this.describeCodexAppServerProfile()}\n\n用法：\`/codex profile main\``,
+        message: `当前 Codex 运行档：${this.describeCodexAppServerProfile()}\n\n用法：${this.buildProfileUsageText()}`,
       };
     }
     if (!(rawAlias in CODEX_APP_SERVER_PROFILES)) {
       return {
         ok: false,
-        message: "未知运行档。可用：`main`。",
+        message: `未知运行档。可用：${this.buildProfileAliasListText()}。`,
       };
     }
     if (this.activeTurnIdByThreadId.size > 0) {
@@ -338,6 +341,10 @@ class FeishuBotRuntime {
         ok: true,
         message: `已经是当前运行档：${this.describeCodexAppServerProfile()}`,
       };
+    }
+
+    if (typeof this.extensions?.codexProfiles?.beforeSwitchCodexAppServerProfile === "function") {
+      await this.extensions.codexProfiles.beforeSwitchCodexAppServerProfile(nextProfile, process.env);
     }
 
     await this.codex.restartSpawn({ appServerProfile: nextProfile });
@@ -365,8 +372,9 @@ class FeishuBotRuntime {
           "",
           "用法：",
           "`/codex profile main`",
+          ...this.getExtensionProfileHelpLines(),
           "",
-          "说明：该命令会重启飞书桥背后的 Codex app-server。",
+          `说明：该命令会重启飞书桥背后的 Codex app-server${this.getExtensionProfileNote()}。`,
         ].join("\n"),
       });
       return;
@@ -396,6 +404,29 @@ class FeishuBotRuntime {
         text: `切换 Codex 运行档失败：${error.message}`,
       });
     }
+  }
+
+  getExtensionProfileHelpLines() {
+    const getLines = this.extensions?.codexProfiles?.getProfileHelpLines;
+    return typeof getLines === "function" ? getLines() : [];
+  }
+
+  getExtensionProfileNote() {
+    const getNote = this.extensions?.codexProfiles?.getProfileNote;
+    return typeof getNote === "function" ? getNote() : "";
+  }
+
+  buildProfileUsageText() {
+    return ["`/codex profile main`", ...this.getExtensionProfileHelpLines()].join(" 或 ");
+  }
+
+  buildProfileAliasListText() {
+    const labels = ["`main`"];
+    const displayNames = this.extensions?.codexProfiles?.displayNames || {};
+    for (const name of Object.values(displayNames)) {
+      labels.push(`\`${name}\``);
+    }
+    return labels.join("、");
   }
 
   async resolveWorkspaceStats(workspaceRoot) {
