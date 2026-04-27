@@ -1,0 +1,49 @@
+{
+  "name": "codex-feishu-bridge",
+  "version": "0.1.0",
+  "description": "A focused Feishu/Lark bridge for local Codex.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "keywords": [
+    "codex",
+    "feishu",
+    "lark",
+    "bot",
+    "cli",
+    "remote",
+    "gateway"
+  ],
+  "files": [
+    "bin",
+    "docs",
+    "src",
+    "README.md",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "codex-im": "./bin/codex-im.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "feishu-bot": "node ./bin/codex-im.js",
+    "check": "find src bin scripts -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "privacy:scan": "node ./scripts/privacy-scan.js",
+    "pack:dry-run": "npm pack --dry-run",
+    "check:release": "npm run check && npm run privacy:scan && npm audit --omit=dev && npm run pack:dry-run"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.62.0",
+    "axios": "^1.15.2",
+    "dotenv": "^16.4.7",
+    "ws": "^8.19.0"
+  },
+  "overrides": {
+    "axios": "^1.15.2"
+  }
+}
