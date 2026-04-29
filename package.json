@@ -26,6 +26,7 @@
     "bin",
     "docs",
     "src",
+    "CHANGELOG.md",
     "README.md",
     ".env.example"
   ],
