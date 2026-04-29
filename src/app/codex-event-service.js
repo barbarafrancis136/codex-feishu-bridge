@@ -267,6 +267,7 @@ async function deliverToFeishu(runtime, event) {
       turnId: event.payload.turnId,
       chatId: event.payload.chatId,
       text: event.payload.text,
+      mode: event.payload.mode || "delta",
       state: "streaming",
       deferFlush: !runtime.config.feishuStreamingOutput,
     });

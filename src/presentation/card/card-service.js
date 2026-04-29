@@ -4,6 +4,7 @@ const reactionRepo = require("../../infra/feishu/reaction-repo");
 const {
   formatCardKitAssistantMarkdown,
   sanitizeAssistantMarkdown,
+  splitAssistantReplyForDisplay,
 } = require("../../shared/assistant-markdown");
 const { formatFailureText } = require("../../shared/error-text");
 const {
@@ -190,7 +191,7 @@ async function sendCardActionFeedback(runtime, data, text, kind = "info") {
 
 async function upsertAssistantReplyCard(
   runtime,
-  { threadId, turnId, chatId, text, state, deferFlush = false }
+  { threadId, turnId, chatId, text, state, mode = "delta", deferFlush = false }
 ) {
   if (!threadId || !chatId) {
     return;
@@ -225,6 +226,8 @@ async function upsertAssistantReplyCard(
       chatId,
       replyToMessageId: "",
       text: "",
+      answerText: "",
+      processText: "",
       state: "streaming",
       threadId,
       turnId: resolvedTurnId,
@@ -238,7 +241,7 @@ async function upsertAssistantReplyCard(
   }
 
   if (typeof text === "string" && text.length > 0) {
-    existing.text = mergeReplyText(existing.text, text);
+    applyAssistantReplyText(existing, text, mode);
   }
   existing.chatId = chatId;
   existing.replyToMessageId = runtime.pendingChatContextByThreadId.get(threadId)?.messageId || existing.replyToMessageId || "";
@@ -266,6 +269,69 @@ async function upsertAssistantReplyCard(
     || existing.state === "failed"
     || (!existing.messageId && typeof existing.text === "string" && existing.text.trim());
   await scheduleReplyCardFlush(runtime, runKey, { immediate: shouldFlushImmediately });
+}
+
+function applyAssistantReplyText(entry, text, mode = "delta") {
+  const incoming = typeof text === "string" ? text : "";
+  if (!incoming) {
+    return;
+  }
+  if (mode === "completed_snapshot") {
+    applyCompletedAssistantSnapshot(entry, incoming);
+    return;
+  }
+  entry.text = mergeReplyText(entry.text, incoming);
+  entry.answerText = mergeReplyText(entry.answerText || "", incoming);
+}
+
+function applyCompletedAssistantSnapshot(entry, text) {
+  const completedText = sanitizeAssistantMarkdown(text, { preserveHeadings: true });
+  if (!completedText) {
+    return;
+  }
+
+  const accumulated = sanitizeAssistantMarkdown(entry.answerText || entry.text || "", { preserveHeadings: true });
+  const processPrefix = extractProcessPrefixFromCompletedSnapshot(accumulated, completedText);
+  if (processPrefix) {
+    entry.processText = mergeProcessText(entry.processText, processPrefix);
+  }
+
+  entry.answerText = completedText;
+  entry.text = completedText;
+}
+
+function extractProcessPrefixFromCompletedSnapshot(accumulated, completedText) {
+  const normalizedAccumulated = String(accumulated || "").trim();
+  const normalizedCompleted = String(completedText || "").trim();
+  if (!normalizedAccumulated || !normalizedCompleted || normalizedAccumulated === normalizedCompleted) {
+    return "";
+  }
+  if (normalizedAccumulated.endsWith(normalizedCompleted)) {
+    return normalizedAccumulated.slice(0, normalizedAccumulated.length - normalizedCompleted.length).trim();
+  }
+  const markerIndex = normalizedAccumulated.lastIndexOf(normalizedCompleted);
+  if (markerIndex > 0) {
+    return normalizedAccumulated.slice(0, markerIndex).trim();
+  }
+  return "";
+}
+
+function mergeProcessText(current, incoming) {
+  const left = String(current || "").trim();
+  const right = String(incoming || "").trim();
+  if (!right) {
+    return left;
+  }
+  if (!left) {
+    return right;
+  }
+  if (left.includes(right)) {
+    return left;
+  }
+  if (right.includes(left)) {
+    return right;
+  }
+  return `${left}\n\n${right}`.trim();
 }
 
 async function scheduleReplyCardFlush(runtime, runKey, { immediate = false } = {}) {
@@ -444,7 +510,8 @@ function buildCardKitStreamingCard(runtime, runKey, entry, options = {}) {
 
 function buildCardKitFinalCard(runtime, entry) {
   const runKey = codexMessageUtils.buildRunKey(entry.threadId, entry.turnId);
-  const content = buildCardKitStreamingContent(entry);
+  const display = buildAssistantDisplayContent(entry);
+  const content = display.answer;
   const footer = buildCardKitFooter(runtime, entry);
   const elements = [
     ...buildCardKitStatusPanels(runtime, runKey, entry),
@@ -484,6 +551,7 @@ function buildCardKitStatusPanels(runtime, runKey, entry) {
   const toolTrace = runtime.toolTraceByRunKey.get(runKey);
   const elapsed = formatReplyElapsed(entry.startedAt);
   const tokenUsage = runtime.latestTokenUsageByThreadId.get(entry.threadId);
+  const display = buildAssistantDisplayContent(entry);
   return [
     buildCardKitCollapsiblePanel({
       title: buildToolPanelTitle(runtime.toolItemIdsByRunKey.get(runKey), entry.state),
@@ -496,6 +564,7 @@ function buildCardKitStatusPanels(runtime, runKey, entry) {
         elapsed,
         toolTrace,
         tokenUsage,
+        assistantNotes: display.notes,
       }),
     }),
   ];
@@ -542,22 +611,28 @@ function buildToolPanelTitle(toolItems, state) {
 }
 
 function buildCardKitStreamingContent(entry) {
-  return formatCardKitAssistantMarkdown(resolveAssistantReplyContent(entry));
+  return buildAssistantDisplayContent(entry).answer;
 }
 
 function buildCardKitStatusSignature(runtime, runKey, entry) {
   const toolItems = runtime.toolItemIdsByRunKey.get(runKey);
   const toolTrace = runtime.toolTraceByRunKey.get(runKey);
   const tokenUsage = runtime.latestTokenUsageByThreadId.get(entry.threadId);
+  const display = buildAssistantDisplayContent(entry);
   return JSON.stringify({
     state: entry.state,
     toolCount: toolItems instanceof Set ? toolItems.size : 0,
     toolTrace: Array.isArray(toolTrace) ? toolTrace.filter(Boolean) : [],
     reasoning: Number(tokenUsage?.last?.reasoningOutputTokens || 0),
+    notes: display.notes,
   });
 }
 
 function resolveAssistantReplyContent(entry) {
+  const answerText = typeof entry.answerText === "string" ? entry.answerText.trim() : "";
+  if (answerText) {
+    return answerText;
+  }
   const text = typeof entry.text === "string" ? entry.text.trim() : "";
   if (text) {
     return text;
@@ -569,6 +644,28 @@ function resolveAssistantReplyContent(entry) {
     return "我已经处理好了。";
   }
   return "我正在整理正式回复。";
+}
+
+function buildAssistantDisplayContent(entry) {
+  const raw = resolveAssistantReplyContent(entry);
+  const explicitProcessText = typeof entry.processText === "string" ? entry.processText.trim() : "";
+  if (entry.state !== "completed") {
+    return {
+      answer: formatCardKitAssistantMarkdown(raw),
+      notes: explicitProcessText ? formatCardKitThinkingMarkdown(explicitProcessText) : "",
+    };
+  }
+  if (explicitProcessText) {
+    return {
+      answer: formatCardKitAssistantMarkdown(raw),
+      notes: formatCardKitThinkingMarkdown(explicitProcessText),
+    };
+  }
+  const split = splitAssistantReplyForDisplay(raw);
+  return {
+    answer: formatCardKitAssistantMarkdown(split.answerText),
+    notes: formatCardKitThinkingMarkdown(split.preAnswerText),
+  };
 }
 
 function buildCardKitFooter(runtime, entry) {
@@ -627,8 +724,11 @@ function buildCardKitSummary(content, state) {
 }
 
 async function flushLegacyReplyCard(runtime, runKey, entry) {
+  const legacyDisplay = entry.state === "completed"
+    ? splitAssistantReplyForDisplay(resolveAssistantReplyContent(entry))
+    : { answerText: entry.text };
   const card = buildAssistantReplyCard({
-    text: entry.text,
+    text: legacyDisplay.answerText,
     state: entry.state,
     elapsed: formatReplyElapsed(entry.startedAt),
     model: runtime.config.defaultCodexModel || "Codex",
@@ -638,6 +738,7 @@ async function flushLegacyReplyCard(runtime, runKey, entry) {
       elapsed: formatReplyElapsed(entry.startedAt),
       toolTrace: runtime.toolTraceByRunKey.get(runKey),
       tokenUsage: runtime.latestTokenUsageByThreadId.get(entry.threadId),
+      assistantNotes: buildAssistantDisplayContent(entry).notes,
     }),
     usageText: formatUsageText(runtime.latestTokenUsageByThreadId.get(entry.threadId)),
     contextText: formatContextText(runtime.latestTokenUsageByThreadId.get(entry.threadId)),
@@ -839,15 +940,22 @@ function formatToolTraceText(toolTrace, state) {
   return steps.map((step) => `- ${step}`).join("\n");
 }
 
-function formatThinkingText({ state, elapsed, toolTrace, tokenUsage }) {
+function formatThinkingText({ state, elapsed, toolTrace, tokenUsage, assistantNotes = "" }) {
   const steps = Array.isArray(toolTrace) ? toolTrace.filter(Boolean) : [];
   const reasoningTokens = Number(tokenUsage?.last?.reasoningOutputTokens || 0);
+  const publicNotes = typeof assistantNotes === "string" ? assistantNotes.trim() : "";
   if (state === "failed") {
     return elapsed
       ? `这轮在 ${elapsed} 左右断流了，我没把它完整收住。`
       : "这轮中途断掉了，所以我先停在这里。";
   }
   if (state === "completed") {
+    if (publicNotes) {
+      const prefix = elapsed
+        ? `这轮已经收口，耗时约 ${elapsed}。下面是公开的前置上下文/过程摘要，不是隐藏推理链：`
+        : "这轮已经收口。下面是公开的前置上下文/过程摘要，不是隐藏推理链：";
+      return `${prefix}\n\n${publicNotes}`;
+    }
     if (steps.length) {
       return elapsed
         ? `这轮已经收口。我先过了一遍问题，再走了 ${steps.length} 个步骤，最后在 ${elapsed} 左右把回复收好。`
@@ -867,6 +975,15 @@ function formatThinkingText({ state, elapsed, toolTrace, tokenUsage }) {
     return `底层已经在思考，但当前没有公开思考摘要；我会显示可公开的阶段状态。`;
   }
   return "我先把你的意思接住，再把这轮回复往清楚的方向收。";
+}
+
+function formatCardKitThinkingMarkdown(text) {
+  const formatted = formatCardKitAssistantMarkdown(text);
+  if (Buffer.byteLength(formatted, "utf8") <= 8000) {
+    return formatted;
+  }
+  const clipped = formatted.slice(0, 3600).trim();
+  return `${clipped}\n\n_思考面板内容较长，已截断显示。_`;
 }
 
 function formatCompactTokens(value) {
