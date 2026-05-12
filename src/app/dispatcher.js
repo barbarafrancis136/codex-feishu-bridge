@@ -1,9 +1,10 @@
 const messageNormalizers = require("../presentation/message/normalizers");
 const eventsRuntime = require("./codex-event-service");
+const attachmentRuntime = require("../domain/attachments/attachment-service");
 const { formatFailureText } = require("../shared/error-text");
 
 async function onFeishuTextEvent(runtime, event) {
-  const normalized = messageNormalizers.normalizeFeishuTextEvent(event, runtime.config);
+  let normalized = messageNormalizers.normalizeFeishuTextEvent(event, runtime.config);
   if (!normalized) {
     return;
   }
@@ -16,7 +17,10 @@ async function onFeishuTextEvent(runtime, event) {
     return;
   }
 
-  if (await runtime.dispatchTextCommand(normalized)) {
+  const hasAttachmentPayload = normalized.command === "image_message"
+    || normalized.command === "attachment_message"
+    || (Array.isArray(normalized.attachments) && normalized.attachments.length > 0);
+  if (!hasAttachmentPayload && await runtime.dispatchTextCommand(normalized)) {
     return;
   }
 
@@ -28,6 +32,16 @@ async function onFeishuTextEvent(runtime, event) {
     return;
   }
   const { bindingKey, workspaceRoot } = workspaceContext;
+  const isImageMessage = normalized.command === "image_message";
+  if (hasAttachmentPayload) {
+    normalized = await attachmentRuntime.prepareAttachmentMessage(runtime, normalized, {
+      workspaceRoot,
+      expectedKind: isImageMessage ? "image" : "",
+    });
+    if (!normalized) {
+      return;
+    }
+  }
   const { threadId } = await runtime.resolveWorkspaceThreadState({
     bindingKey,
     workspaceRoot,

@@ -54,7 +54,8 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
     console.log(`[codex-im] turn/start first message thread=${createdThreadId}`);
     await runtime.codex.sendUserMessage({
       threadId: createdThreadId,
-      text: normalized.text,
+      text: buildMessageWithBridgeCapabilities(normalized.text),
+      attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
       accessMode: runtime.config.defaultCodexAccessMode,
@@ -69,7 +70,8 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
     await ensureThreadResumed(runtime, threadId);
     await runtime.codex.sendUserMessage({
       threadId,
-      text: normalized.text,
+      text: buildMessageWithBridgeCapabilities(normalized.text),
+      attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
       accessMode: runtime.config.defaultCodexAccessMode,
@@ -95,7 +97,8 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
     console.log(`[codex-im] turn/start retry thread=${recreatedThreadId}`);
     await runtime.codex.sendUserMessage({
       threadId: recreatedThreadId,
-      text: normalized.text,
+      text: buildMessageWithBridgeCapabilities(normalized.text),
+      attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
       accessMode: runtime.config.defaultCodexAccessMode,
@@ -312,6 +315,17 @@ function isSupportedThreadSourceKind(sourceKind) {
 function shouldRecreateThread(error) {
   const message = String(error?.message || "").toLowerCase();
   return message.includes("thread not found") || message.includes("unknown thread");
+}
+
+function buildMessageWithBridgeCapabilities(text) {
+  return [
+    "<feishu-bridge-capabilities>",
+    "[System note: This Feishu/Lark bridge can send current-workspace attachments back to Feishu. If the user asks you to send a local image, file, or audio, create or locate the file under the bound workspace, then include a hidden directive on its own line: [[codex-feishu-send:relative/path/from/workspace]]. The bridge will upload it. Supported routing: images as Feishu image messages, .opus/.mp4 as audio, other files as file messages. Do not use absolute paths in the directive; keep a short human explanation separately.]",
+    "[System note: Replies are shown in Feishu CardKit. Prefer scan-friendly Markdown: short paragraphs, ordered/bulleted lists, Markdown tables for comparisons, and fenced code blocks for commands/snippets.]",
+    "</feishu-bridge-capabilities>",
+    "",
+    text,
+  ].join("\n");
 }
 
 module.exports = {

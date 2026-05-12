@@ -27,6 +27,10 @@ function readConfig() {
     codexRpcTimeoutMs: readPositiveIntEnv("CODEX_IM_CODEX_RPC_TIMEOUT_MS", 45000),
     codexTurnStartTimeoutMs: readPositiveIntEnv("CODEX_IM_CODEX_TURN_START_TIMEOUT_MS", 60000),
     staleTurnTimeoutMs: readPositiveIntEnv("CODEX_IM_STALE_TURN_TIMEOUT_MS", 30 * 60 * 1000),
+    attachmentsDir: process.env.CODEX_IM_ATTACHMENTS_DIR
+      || path.join(os.homedir(), ".codex-feishu-bridge", "attachments"),
+    maxImageBytes: readPositiveIntEnv("CODEX_IM_MAX_IMAGE_BYTES", 10 * 1024 * 1024),
+    maxAttachmentBytes: readPositiveIntEnv("CODEX_IM_MAX_ATTACHMENT_BYTES", 100 * 1024 * 1024),
     sessionsFile: process.env.CODEX_IM_SESSIONS_FILE
       || path.join(os.homedir(), ".codex-im", "sessions.json"),
   };

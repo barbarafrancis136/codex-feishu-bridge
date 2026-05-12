@@ -97,6 +97,7 @@ class FeishuBotRuntime {
     this.workspaceRootByThreadId = new Map();
     this.approvalAllowlistByWorkspaceRoot = new Map();
     this.inFlightApprovalRequestKeys = new Set();
+    this.sentAttachmentDirectiveKeys = new Set();
     this.resumedThreadIds = new Set();
     this.staleTurnWatchdog = null;
     this.extensions = runtimeExtensions;

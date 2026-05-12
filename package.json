@@ -1,6 +1,6 @@
 {
   "name": "codex-feishu-bridge",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A focused Feishu/Lark bridge for local Codex.",
   "license": "MIT",
   "repository": {
@@ -44,9 +44,11 @@
     "check": "find src bin scripts -name '*.js' -print0 | xargs -0 -n1 node --check",
     "test:markdown": "node ./scripts/test-assistant-markdown.js",
     "test:card-content": "node ./scripts/test-card-reply-content.js",
+    "test:media": "node ./scripts/test-media-fixtures.js",
+    "test:directives": "node ./scripts/test-outbound-directives.js",
     "privacy:scan": "node ./scripts/privacy-scan.js",
     "pack:dry-run": "npm pack --dry-run",
-    "check:release": "npm run check && npm run test:markdown && npm run test:card-content && npm run privacy:scan && npm audit --omit=dev && npm run pack:dry-run"
+    "check:release": "npm run check && npm run test:markdown && npm run test:card-content && npm run test:media && npm run test:directives && npm run privacy:scan && npm audit --omit=dev && npm run pack:dry-run"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.62.0",

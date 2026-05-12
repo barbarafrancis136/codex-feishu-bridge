@@ -1,4 +1,5 @@
 const codexMessageUtils = require("../infra/codex/message-utils");
+const attachmentDirectives = require("../domain/attachments/outbound-directive-service");
 const { formatFailureText } = require("../shared/error-text");
 
 async function handleStopCommand(runtime, normalized) {
@@ -262,11 +263,20 @@ function truncateInline(text, limit = 80) {
 
 async function deliverToFeishu(runtime, event) {
   if (event.type === "im.agent_reply") {
-    await runtime.upsertAssistantReplyCard({
+    const attachmentResult = await attachmentDirectives.handleOutboundAttachmentDirectives(runtime, {
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       chatId: event.payload.chatId,
       text: event.payload.text,
+    });
+    if (!attachmentResult.text && attachmentResult.sent > 0) {
+      return;
+    }
+    await runtime.upsertAssistantReplyCard({
+      threadId: event.payload.threadId,
+      turnId: event.payload.turnId,
+      chatId: event.payload.chatId,
+      text: attachmentResult.text,
       mode: event.payload.mode || "delta",
       state: "streaming",
       deferFlush: !runtime.config.feishuStreamingOutput,

@@ -12,7 +12,7 @@
 
 架构和维护边界见：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-版本更新记录见：[CHANGELOG.md](CHANGELOG.md)。当前版本：`0.2.3`。
+版本更新记录见：[CHANGELOG.md](CHANGELOG.md)。当前版本：`0.2.4`。
 
 ## 它能做什么
 
@@ -24,6 +24,8 @@
 - 停止正在运行的 Codex 任务。
 - 通过飞书审批 Codex 发起的操作请求。
 - 把绑定项目内的文件发送到飞书。
+- 接收飞书图片并作为 Codex 原生图片输入读取。
+- 让 Codex 通过隐藏指令把当前项目内的图片或文件回传到飞书。
 - 用流式飞书卡片展示 Codex 回复、工具执行和 token 用量摘要。
 
 ## 它不做什么
@@ -58,6 +60,20 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
 CODEX_IM_DEFAULT_CODEX_MODEL=gpt-5.3-codex
 CODEX_IM_DEFAULT_CODEX_EFFORT=medium
 CODEX_IM_DEFAULT_CODEX_ACCESS_MODE=default
+```
+
+图片和附件会下载到本机私有缓存，默认位置：
+
+```text
+~/.codex-feishu-bridge/attachments
+```
+
+可选配置：
+
+```text
+CODEX_IM_ATTACHMENTS_DIR=/Users/your-name/.codex-feishu-bridge/attachments
+CODEX_IM_MAX_IMAGE_BYTES=10485760
+CODEX_IM_MAX_ATTACHMENT_BYTES=104857600
 ```
 
 配置加载顺序：
@@ -109,10 +125,19 @@ CODEX_IM_DEFAULT_CODEX_ACCESS_MODE=default
 | 发送/删除表情回复 | `im:message.reactions:write_only` |
 | 获取与上传图片或文件资源 | `im:resource` |
 
+## 媒体附件
+
+- 收图：飞书/Lark 图片会下载到本地私有缓存，并作为 Codex `localImage` 输入进入当前轮。
+- 收文件/语音：文件和音频会下载到本地私有缓存；文本类文件会附带安全预览，二进制文件和音频先传元信息与本地路径。
+- 手动回传：`/codex send <当前项目下的相对文件路径>` 会自动按类型发送，图片走飞书图片消息，`.opus/.mp4` 走音频消息，其他文件走普通文件消息。
+- 自动回传：Codex 回复中可包含独立一行隐藏指令 `[[codex-feishu-send:relative/path/from/workspace]]`，桥会上传该文件并从飞书发出，同时从展示文本中移除指令。
+
 ## 开发检查
 
 ```sh
 npm run check
+npm run test:media
+npm run test:directives
 npm run privacy:scan
 npm audit --omit=dev
 npm pack --dry-run

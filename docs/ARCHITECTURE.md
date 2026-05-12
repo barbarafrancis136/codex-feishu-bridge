@@ -16,7 +16,7 @@ src/app/
   Runtime orchestration and command dispatch
 
 src/domain/
-  Workspace, thread, approval, and session behavior
+  Workspace, thread, attachment, approval, and session behavior
 
 src/infra/
   Feishu SDK adapter, Codex RPC client, config, storage
@@ -39,6 +39,8 @@ Examples of public core:
 - Bind a Feishu conversation to a local workspace.
 - Start or reuse Codex threads.
 - Approve or reject Codex actions.
+- Download Feishu/Lark images and pass them to Codex as localImage inputs.
+- Upload current-workspace images or files back to Feishu/Lark.
 
 Examples of private extensions:
 

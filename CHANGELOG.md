@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.4 - 2026-05-12
+
+### Added
+
+- Added Feishu/Lark image intake: image and rich post image resources are downloaded to a local private cache and passed to Codex as native `localImage` input.
+- Added outbound attachment directives with `[[codex-feishu-send:relative/path]]` so Codex can send current-workspace images and files back to Feishu/Lark.
+- Added media and outbound directive regression fixtures.
+
+### Changed
+
+- Documented attachment cache configuration and media behavior in README and the Chinese usage guide.
+- Updated `protobufjs` transitive dependencies in the lockfile through `npm audit fix`.
+
+### Verification
+
+- `npm run check:release` passed locally.
+- Privacy scan passed; no private runtime extensions, local workspace paths, secrets, logs, or personal automation code are included.
+
 ## v0.2.3 - 2026-04-29
 
 ### Changed

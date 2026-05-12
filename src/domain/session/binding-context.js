@@ -167,6 +167,7 @@ function pruneRuntimeMapSizes(runtime) {
   pruneMapToLimit(runtime.activeTurnIdByThreadId, MAX_THREAD_CONTEXT_CACHE_ENTRIES);
   pruneMapToLimit(runtime.activeTurnStartedAtByThreadId, MAX_THREAD_CONTEXT_CACHE_ENTRIES);
   pruneMapToLimit(runtime.currentRunKeyByThreadId, MAX_THREAD_CONTEXT_CACHE_ENTRIES);
+  pruneSetToLimit(runtime.sentAttachmentDirectiveKeys, MAX_THREAD_CONTEXT_CACHE_ENTRIES);
 }
 
 function pruneMapToLimit(map, limit) {
@@ -179,6 +180,19 @@ function pruneMapToLimit(map, limit) {
       break;
     }
     map.delete(oldestKey);
+  }
+}
+
+function pruneSetToLimit(set, limit) {
+  if (!set || set.size <= limit) {
+    return;
+  }
+  while (set.size > limit) {
+    const oldestKey = set.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    set.delete(oldestKey);
   }
 }
 
