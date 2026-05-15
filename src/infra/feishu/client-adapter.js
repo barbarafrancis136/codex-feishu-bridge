@@ -1,5 +1,9 @@
 const fs = require("fs");
 const path = require("path");
+const { createLogger } = require("../../shared/logger");
+const logger = createLogger("feishu-adapter");
+const FEISHU_RETRY_MAX_ATTEMPTS = normalizePositiveInt(process.env.CODEX_IM_FEISHU_RETRY_MAX_ATTEMPTS, 3);
+const FEISHU_RETRY_BASE_DELAY_MS = normalizePositiveInt(process.env.CODEX_IM_FEISHU_RETRY_BASE_DELAY_MS, 300);
 
 // Feishu SDK adapter and compatibility helpers
 class FeishuClientAdapter {
@@ -54,7 +58,7 @@ class FeishuClientAdapter {
   async sendResourceMessage({ chatId, replyToMessageId = "", replyInThread = false, msgType, content }) {
     if (replyToMessageId) {
       const replyMessage = resolveReplyMessageMethod(this.client);
-      return replyMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
+      return callWithRetry(() => replyMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
         path: {
           message_id: normalizeMessageId(replyToMessageId),
         },
@@ -63,11 +67,11 @@ class FeishuClientAdapter {
           content,
           reply_in_thread: replyInThread,
         },
-      });
+      }), { operation: "message.reply" });
     }
 
     const createMessage = resolveCreateMessageMethod(this.client);
-    return createMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
+    return callWithRetry(() => createMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
       params: {
         receive_id_type: "chat_id",
       },
@@ -76,7 +80,7 @@ class FeishuClientAdapter {
         msg_type: msgType,
         content,
       },
-    });
+    }), { operation: "message.create" });
   }
 
   async sendInteractiveCard({ chatId, card, replyToMessageId = "", replyInThread = false }) {
@@ -109,14 +113,14 @@ class FeishuClientAdapter {
 
   async patchInteractiveCard({ messageId, card }) {
     const patchMessage = resolvePatchMessageMethod(this.client);
-    return patchMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
+    return callWithRetry(() => patchMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
       path: {
         message_id: messageId,
       },
       data: {
         content: JSON.stringify(card),
       },
-    });
+    }), { operation: "message.patch" });
   }
 
   async createCardEntity({ card }) {
@@ -260,20 +264,20 @@ class FeishuClientAdapter {
     if (Number.isFinite(normalizedDuration) && normalizedDuration > 0) {
       data.duration = normalizedDuration;
     }
-    const response = await createFile.call(this.client.im?.v1?.file || this.client.im?.file || this.client, {
+    const response = await callWithRetry(() => createFile.call(this.client.im?.v1?.file || this.client.im?.file || this.client, {
       data,
-    });
+    }), { operation: "file.create" });
     return normalizeIdentifier(response?.file_key || response?.data?.file_key);
   }
 
   async uploadImage({ imageBuffer }) {
     const createImage = resolveCreateImageMethod(this.client);
-    const response = await createImage.call(this.client.im?.v1?.image || this.client.im?.image || this.client, {
+    const response = await callWithRetry(() => createImage.call(this.client.im?.v1?.image || this.client.im?.image || this.client, {
       data: {
         image_type: "message",
         image: imageBuffer,
       },
-    });
+    }), { operation: "image.create" });
     return normalizeIdentifier(response?.image_key || response?.data?.image_key);
   }
 
@@ -461,6 +465,65 @@ function normalizeFileName(fileName) {
 function normalizeFeishuFileType(fileType) {
   const normalized = typeof fileType === "string" && fileType.trim() ? fileType.trim() : "stream";
   return normalized.replace(/[^a-zA-Z0-9_-]/g, "") || "stream";
+}
+
+async function callWithRetry(fn, { operation = "feishu.request" } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= FEISHU_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableFeishuError(error);
+      const finalAttempt = attempt >= FEISHU_RETRY_MAX_ATTEMPTS;
+      if (!retryable || finalAttempt) {
+        throw error;
+      }
+      const delayMs = FEISHU_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+      logger.warn("feishu request failed, retrying", {
+        operation,
+        attempt,
+        delayMs,
+        error,
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError || new Error(`Feishu ${operation} failed`);
+}
+
+function isRetryableFeishuError(error) {
+  const text = `${error?.message || ""} ${error?.code || ""}`.toLowerCase();
+  if (
+    text.includes("timeout")
+    || text.includes("timed out")
+    || text.includes("econnreset")
+    || text.includes("eai_again")
+    || text.includes("socket hang up")
+    || text.includes("rate limit")
+    || text.includes("too many requests")
+    || text.includes("429")
+    || text.includes("5xx")
+  ) {
+    return true;
+  }
+  const status = Number(error?.response?.status || error?.status || 0);
+  if (Number.isFinite(status) && (status === 429 || status >= 500)) {
+    return true;
+  }
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizePositiveInt(raw, fallback) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
 }
 
 module.exports = {
