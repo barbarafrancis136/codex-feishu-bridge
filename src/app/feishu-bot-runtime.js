@@ -448,6 +448,58 @@ class FeishuBotRuntime {
       throw error;
     }
   }
+
+  async runBeforeMessageHook(args) {
+    const hook = this.extensions?.hooks?.beforeMessage;
+    if (typeof hook !== "function") {
+      return args?.normalized || null;
+    }
+    try {
+      const result = await hook(args);
+      return result || args?.normalized || null;
+    } catch (error) {
+      logger.warn("beforeMessage hook failed", { error });
+      return args?.normalized || null;
+    }
+  }
+
+  async runAfterCodexReplyHook(args) {
+    const hook = this.extensions?.hooks?.afterCodexReply;
+    if (typeof hook !== "function") {
+      return String(args?.text || "");
+    }
+    try {
+      const result = await hook(args);
+      return typeof result === "string" ? result : String(args?.text || "");
+    } catch (error) {
+      logger.warn("afterCodexReply hook failed", { error });
+      return String(args?.text || "");
+    }
+  }
+
+  async runApprovalRequestHook(args) {
+    const hook = this.extensions?.hooks?.onApprovalRequest;
+    if (typeof hook !== "function") {
+      return;
+    }
+    try {
+      await hook(args);
+    } catch (error) {
+      logger.warn("onApprovalRequest hook failed", { error });
+    }
+  }
+
+  async runUsageUpdateHook(args) {
+    const hook = this.extensions?.hooks?.onUsageUpdate;
+    if (typeof hook !== "function") {
+      return;
+    }
+    try {
+      await hook(args);
+    } catch (error) {
+      logger.warn("onUsageUpdate hook failed", { error });
+    }
+  }
 }
 
 function attachRuntimeForwarders() {

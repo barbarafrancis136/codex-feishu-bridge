@@ -8,6 +8,14 @@ async function onFeishuTextEvent(runtime, event) {
   if (!normalized) {
     return;
   }
+  normalized = await runtime.runBeforeMessageHook({
+    event,
+    normalized,
+    runtime,
+  });
+  if (!normalized) {
+    return;
+  }
   if (normalized.command === "unsupported_message") {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,

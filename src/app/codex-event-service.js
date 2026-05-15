@@ -104,6 +104,14 @@ function trackLatestTokenUsage(runtime, message) {
     return;
   }
   runtime.latestTokenUsageByThreadId.set(threadId, usage);
+  runtime.runUsageUpdateHook({
+    threadId,
+    usage,
+    message,
+    runtime,
+  }).catch((error) => {
+    logger.warn("onUsageUpdate hook invocation failed", { error });
+  });
 }
 
 function trackRunningTurnStartedAt(runtime, message) {
@@ -265,11 +273,19 @@ function truncateInline(text, limit = 80) {
 
 async function deliverToFeishu(runtime, event) {
   if (event.type === "im.agent_reply") {
-    const attachmentResult = await attachmentDirectives.handleOutboundAttachmentDirectives(runtime, {
+    const hookedText = await runtime.runAfterCodexReplyHook({
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       chatId: event.payload.chatId,
       text: event.payload.text,
+      event,
+      runtime,
+    });
+    const attachmentResult = await attachmentDirectives.handleOutboundAttachmentDirectives(runtime, {
+      threadId: event.payload.threadId,
+      turnId: event.payload.turnId,
+      chatId: event.payload.chatId,
+      text: hookedText,
     });
     if (!attachmentResult.text && attachmentResult.sent > 0) {
       return;
@@ -324,11 +340,18 @@ async function deliverToFeishu(runtime, event) {
     if (!approval) {
       return;
     }
+    await runtime.runApprovalRequestHook({
+      threadId: event.payload.threadId,
+      turnId: event.payload.turnId || "",
+      approval,
+      event,
+      runtime,
+    });
     await runtime.flushAssistantReplyCardNow({
       threadId: event.payload.threadId,
       turnId: event.payload.turnId || "",
     }).catch((error) => {
-      console.error(`[codex-im] failed to flush reply before approval prompt: ${error.message}`);
+      logger.error("failed to flush reply before approval prompt", { error });
     });
     const autoApproved = await runtime.tryAutoApproveRequest(event.payload.threadId, approval);
     if (autoApproved) {

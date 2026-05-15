@@ -63,3 +63,12 @@ onUsageUpdate(usage, context)
 ```
 
 Hooks must receive structured context and return structured results. They must not require private paths, private tokens, or private platform assumptions in the public core.
+
+Current public hook surface is defined in `src/app/runtime-extensions.js`:
+
+- `hooks.beforeMessage({ event, normalized, runtime }) => normalized | null`
+- `hooks.afterCodexReply({ threadId, turnId, chatId, text, event, runtime }) => string`
+- `hooks.onApprovalRequest({ threadId, turnId, approval, event, runtime })`
+- `hooks.onUsageUpdate({ threadId, usage, message, runtime })`
+
+Default behavior is no-op. Private integrations should implement these hooks outside this repository and keep the core contract stable.

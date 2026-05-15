@@ -6,6 +6,14 @@ const emptyCodexProfiles = Object.freeze({
   getProfileNote: () => "",
 });
 
+const emptyHooks = Object.freeze({
+  beforeMessage: async ({ normalized }) => normalized,
+  afterCodexReply: async ({ text }) => text,
+  onApprovalRequest: async () => {},
+  onUsageUpdate: async () => {},
+});
+
 module.exports = {
   codexProfiles: emptyCodexProfiles,
+  hooks: emptyHooks,
 };
