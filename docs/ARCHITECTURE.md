@@ -84,3 +84,18 @@ A minimal template is provided at:
 ```text
 docs/examples/runtime-extensions.example.cjs
 ```
+
+A production-oriented skeleton template is also provided:
+
+```text
+docs/examples/runtime-extensions.production-skeleton.cjs
+```
+
+Suggested env toggles for private extension behavior:
+
+```text
+CODEX_IM_EXT_HOOKS_ENABLED=true
+CODEX_IM_EXT_REPLY_TAG=
+CODEX_IM_EXT_APPROVAL_AUDIT=true
+CODEX_IM_EXT_USAGE_AUDIT=false
+```
