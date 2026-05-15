@@ -72,3 +72,15 @@ Current public hook surface is defined in `src/app/runtime-extensions.js`:
 - `hooks.onUsageUpdate({ threadId, usage, message, runtime })`
 
 Default behavior is no-op. Private integrations should implement these hooks outside this repository and keep the core contract stable.
+
+To load an external extension file at runtime:
+
+```text
+CODEX_IM_EXTENSIONS_FILE=/absolute/path/to/runtime-extensions.cjs
+```
+
+A minimal template is provided at:
+
+```text
+docs/examples/runtime-extensions.example.cjs
+```
