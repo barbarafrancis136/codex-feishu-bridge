@@ -18,3 +18,4 @@ dist/
 Thumbs.db
 /.idea/
 /sessions.json
+.runtime/

@@ -12,6 +12,8 @@
 
 架构和维护边界见：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+7×24 部署（`systemd --user`）见：[docs/OPERATIONS_SYSTEMD_USER.md](docs/OPERATIONS_SYSTEMD_USER.md)。
+
 版本更新记录见：[CHANGELOG.md](CHANGELOG.md)。当前版本：`0.2.4`。
 
 ## 它能做什么

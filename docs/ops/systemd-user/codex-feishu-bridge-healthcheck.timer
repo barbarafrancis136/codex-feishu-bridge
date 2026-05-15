@@ -1,0 +1,12 @@
+[Unit]
+Description=Run codex-feishu-bridge healthcheck every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=codex-feishu-bridge-healthcheck.service
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,42 @@
+[Unit]
+Description=Codex Feishu Bridge (user)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+Environment=NODE_ENV=production
+Environment=PATH=__PATH__
+ExecStart=/usr/bin/env npm run feishu-bot
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=control-group
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=65535
+
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=027
+RestrictSUIDSGID=true
+
+# Phase-2 hardening (enable one-by-one after stable run)
+# ProtectControlGroups=true
+# ProtectKernelModules=true
+# ProtectKernelTunables=true
+# LockPersonality=true
+# SystemCallArchitectures=native
+# RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Healthcheck for codex-feishu-bridge (user)
+
+[Service]
+Type=oneshot
+ExecStart=__HEALTHCHECK_SCRIPT__
