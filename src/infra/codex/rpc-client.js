@@ -1,6 +1,7 @@
 const { spawn } = require("child_process");
 const os = require("os");
 const WebSocket = require("ws");
+const { createLogger } = require("../../shared/logger");
 
 const IS_WINDOWS = os.platform() === "win32";
 const DEFAULT_CODEX_COMMAND = "codex";
@@ -10,6 +11,7 @@ const CODEX_CLIENT_INFO = {
   title: "Codex IM Agent",
   version: "0.2.0",
 };
+const logger = createLogger("codex-rpc");
 
 class CodexRpcClient {
   constructor({
@@ -60,7 +62,10 @@ class CodexRpcClient {
         });
         selectedCommand = command;
         child.once("spawn", () => {
-          console.log(`[codex-im] spawned Codex app-server via ${spawnSpec.command} ${spawnSpec.args.join(" ")}`);
+          logger.info("spawned Codex app-server", {
+            command: spawnSpec.command,
+            args: spawnSpec.args,
+          });
         });
         break;
       } catch (error) {
@@ -85,7 +90,10 @@ class CodexRpcClient {
       }
       this.isReady = false;
       this.rejectAllPending(error);
-      console.error(`[codex-im] failed to spawn Codex app-server via ${selectedCommand || this.codexCommand}: ${error.message}`);
+      logger.error("failed to spawn Codex app-server", {
+        command: selectedCommand || this.codexCommand,
+        error,
+      });
     });
 
     child.stdout.on("data", (chunk) => {
@@ -104,7 +112,7 @@ class CodexRpcClient {
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString("utf8").trim();
       if (text) {
-        console.error(`[codex-im] codex stderr: ${text}`);
+        logger.error("codex stderr", { text });
       }
     });
 
@@ -114,7 +122,7 @@ class CodexRpcClient {
       }
       this.isReady = false;
       this.rejectAllPending(new Error(`Codex app-server exited with code ${code}`));
-      console.error(`[codex-im] codex app-server exited with code ${code}`);
+      logger.error("codex app-server exited", { code });
     });
   }
 
@@ -330,7 +338,7 @@ class CodexRpcClient {
 
     if (parsed && parsed.id != null) {
       if (!this.pending.has(String(parsed.id))) {
-        console.warn(`[codex-im] codex<= response for unknown or timed-out request id=${parsed.id}`);
+        logger.warn("codex response for unknown or timed-out request", { id: parsed.id });
         return;
       }
       const { resolve, reject } = this.pending.get(String(parsed.id));
@@ -382,17 +390,17 @@ function tryParseJson(rawMessage) {
 function logCodexOutboundMessage(operation, payload) {
   try {
     const summary = summarizeRawCodexPayload(payload);
-    console.log(`[codex-im] codex=> op=${operation} ${summary}`);
+    logger.info("codex outbound", { operation, summary });
   } catch {
-    console.log(`[codex-im] codex=> op=${operation} <unserializable payload>`);
+    logger.warn("codex outbound unserializable payload", { operation });
   }
 }
 
 function logCodexInboundMessage(message) {
   try {
-    console.log(`[codex-im] codex<= ${summarizeCodexMessage(message)}`);
+    logger.info("codex inbound", { summary: summarizeCodexMessage(message) });
   } catch {
-    console.log("[codex-im] codex<= <unserializable message>");
+    logger.warn("codex inbound unserializable message");
   }
 }
 
@@ -443,7 +451,7 @@ function summarizeCodexMessage(message) {
 
 function logCodexParseFailure(rawMessage) {
   const sample = String(rawMessage || "").slice(0, 300);
-  console.warn(`[codex-im] codex<= [parse_failed] raw=${JSON.stringify(sample)}`);
+  logger.warn("codex parse failed", { rawSample: sample });
 }
 
 function resolveDefaultCodexCommand(env = process.env) {

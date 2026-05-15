@@ -1,6 +1,8 @@
 const codexMessageUtils = require("../infra/codex/message-utils");
 const attachmentDirectives = require("../domain/attachments/outbound-directive-service");
 const { formatFailureText } = require("../shared/error-text");
+const { createLogger } = require("../shared/logger");
+const logger = createLogger("codex-events");
 
 async function handleStopCommand(runtime, normalized) {
   const { bindingKey, workspaceRoot } = runtime.getBindingContext(normalized);
@@ -39,7 +41,7 @@ async function handleStopCommand(runtime, normalized) {
 
 function handleCodexMessage(runtime, message) {
   if (typeof message?.method === "string") {
-    console.log(`[codex-im] codex event ${message.method}`);
+    logger.info("codex event", { method: message.method });
   }
   codexMessageUtils.trackAssistantDeltaReceipt(runtime.assistantDeltaSeenByRunKey, message);
   trackLatestTokenUsage(runtime, message);
@@ -71,21 +73,21 @@ function handleCodexMessage(runtime, message) {
 
   if (codexMessageUtils.eventShouldClearPendingReaction(outbound)) {
     runtime.clearPendingReactionForThread(threadId).catch((error) => {
-      console.error(`[codex-im] failed to clear pending reaction: ${error.message}`);
+      logger.error("failed to clear pending reaction", { threadId, error });
     });
   }
 
   const shouldCleanupThreadState = isTerminalTurnMessage(message);
   runtime.deliverToFeishu(outbound)
     .catch((error) => {
-      console.error(`[codex-im] failed to deliver Feishu message: ${error.message}`);
+      logger.error("failed to deliver Feishu message", { error });
     })
     .finally(() => {
       if (!shouldCleanupThreadState || !threadId) {
         return;
       }
       runtime.clearPendingReactionForThread(threadId).catch((error) => {
-        console.error(`[codex-im] failed to clear pending reaction: ${error.message}`);
+        logger.error("failed to clear pending reaction", { threadId, error });
       });
       runtime.cleanupThreadRuntimeState(threadId);
     });

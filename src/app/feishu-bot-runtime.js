@@ -51,7 +51,9 @@ const approvalPolicyRuntime = require("../domain/approval/approval-policy");
 const appDispatcher = require("./dispatcher");
 const { extractModelCatalogFromListResponse } = require("../shared/model-catalog");
 const { extractProfileValue } = require("../shared/command-parsing");
+const { createLogger } = require("../shared/logger");
 const fs = require("fs");
+const logger = createLogger("runtime");
 
 const CODEX_APP_SERVER_PROFILES = Object.freeze({
   main: "",
@@ -112,7 +114,9 @@ class FeishuBotRuntime {
     await this.refreshAvailableModelCatalogAtStartup();
     this.startLongConnection();
     this.startStaleTurnWatchdog();
-    console.log(`[codex-im] feishu-bot runtime ready for app ${maskSecret(this.config.feishu.appId)}`);
+    logger.info("feishu-bot runtime ready", {
+      appId: maskSecret(this.config.feishu.appId),
+    });
   }
 
   validateConfig() {
@@ -169,14 +173,14 @@ class FeishuBotRuntime {
     const eventDispatcher = new this.lark.EventDispatcher({}).register({
       "im.message.receive_v1": async (data) => {
         appDispatcher.onFeishuTextEvent(this, data).catch((error) => {
-          console.error(`[codex-im] failed to process Feishu message: ${error.message}`);
+          logger.error("failed to process Feishu message", { error });
         });
       },
       "card.action.trigger": async (data) => appDispatcher.onFeishuCardAction(this, data),
     });
 
     this.wsClient.start({ eventDispatcher });
-    console.log("[codex-im] Feishu long connection started");
+    logger.info("Feishu long connection started");
   }
 
   async refreshAvailableModelCatalogAtStartup() {
@@ -195,7 +199,7 @@ class FeishuBotRuntime {
         `Invalid CODEX_IM_DEFAULT_CODEX_EFFORT: ${this.config.defaultCodexEffort} for model ${validatedDefaults.model}`
       );
     }
-    console.log(`[codex-im] model catalog refreshed at startup: ${models.length} entries`);
+    logger.info("model catalog refreshed at startup", { modelCount: models.length });
   }
 
   startStaleTurnWatchdog() {
@@ -206,7 +210,7 @@ class FeishuBotRuntime {
     const intervalMs = Math.max(30000, Math.min(60000, Math.floor(timeoutMs / 3)));
     this.staleTurnWatchdog = setInterval(() => {
       this.clearStaleTurns(timeoutMs).catch((error) => {
-        console.error(`[codex-im] stale turn watchdog failed: ${error.message}`);
+        logger.error("stale turn watchdog failed", { error });
       });
     }, intervalMs);
     if (typeof this.staleTurnWatchdog.unref === "function") {
@@ -222,7 +226,7 @@ class FeishuBotRuntime {
       }
       const context = this.pendingChatContextByThreadId.get(threadId);
       const turnId = this.activeTurnIdByThreadId.get(threadId) || "";
-      console.warn(`[codex-im] stale turn detected thread=${threadId} turn=${turnId}`);
+      logger.warn("stale turn detected", { threadId, turnId });
       this.cleanupThreadRuntimeState(threadId);
       if (context?.chatId) {
         await this.sendInfoCardMessage({
