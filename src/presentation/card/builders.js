@@ -475,6 +475,55 @@ function buildStatusPanelCard({
   };
 }
 
+function buildThreadRow({ thread, isCurrent = false, currentThreadStatusText = "" }) {
+  const threadId = normalizeText(thread?.id) || "unknown-thread";
+  const title = normalizeText(thread?.title) || "未命名线程";
+  const updatedAt = Number(thread?.updatedAt || 0);
+  const timeText = updatedAt > 0 ? new Date(updatedAt).toLocaleString("zh-CN", { hour12: false }) : "";
+
+  const summaryLines = [
+    `**${isCurrent ? "🟢 当前线程" : "🧵 线程"}**`,
+    `ID：\`${escapeCardMarkdown(threadId)}\``,
+    `标题：${escapeCardMarkdown(title)}`,
+  ];
+  if (timeText) {
+    summaryLines.push(`更新时间：${escapeCardMarkdown(timeText)}`);
+  }
+  if (isCurrent && currentThreadStatusText) {
+    summaryLines.push(`状态：${escapeCardMarkdown(currentThreadStatusText)}`);
+  }
+
+  const rowElements = [
+    {
+      tag: "markdown",
+      content: summaryLines.join("\n"),
+      text_size: "notation",
+    },
+  ];
+
+  if (!isCurrent && threadId !== "unknown-thread") {
+    rowElements.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "切换到此线程" },
+      value: buildPanelActionValue("switch_thread", { threadId }),
+    });
+  }
+
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    columns: [
+      {
+        tag: "column",
+        width: "weighted",
+        weight: 1,
+        vertical_align: "top",
+        elements: rowElements,
+      },
+    ],
+  };
+}
+
 function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }) {
   const elements = [
     {
