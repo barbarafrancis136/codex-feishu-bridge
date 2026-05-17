@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0 - Unreleased
+
+### Added
+
+- Added per-workspace access mode persistence (`default` / `full-access`) to session storage.
+- Added `/codex access` and `/codex access <default|full-access>` commands.
+- Added Linux deployment guide and dual-instance runbook for local + cloud operation.
+- Added release checklist document for open-source delivery hygiene.
+
+### Changed
+
+- Codex turn/start now resolves access mode from workspace settings first, then falls back to instance default.
+- Updated help command output to include access mode management.
+- Refreshed README, `.env.example`, and security guidance for open-source + dual-instance usage.
+
 ## v0.2.4 - 2026-05-12
 
 ### Added

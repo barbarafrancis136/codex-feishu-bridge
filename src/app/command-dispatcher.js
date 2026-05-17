@@ -1,4 +1,4 @@
-const { normalizeWorkspacePath } = require("../shared/workspace-paths");
+﻿const { normalizeWorkspacePath } = require("../shared/workspace-paths");
 const {
   PANEL_ACTION_CONFIG,
   THREAD_ACTION_CONFIG,
@@ -19,6 +19,7 @@ const TEXT_COMMAND_HANDLER_METHODS = {
   new: "handleNewCommand",
   model: "handleModelCommand",
   effort: "handleEffortCommand",
+  access: "handleAccessCommand",
   profile: "handleProfileCommand",
   approve: "handleApprovalCommand",
   reject: "handleApprovalCommand",
@@ -213,3 +214,5 @@ module.exports = {
   handleThreadCardAction,
   handleWorkspaceCardAction,
 };
+
+

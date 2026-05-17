@@ -41,7 +41,7 @@
   },
   "scripts": {
     "feishu-bot": "node ./bin/codex-im.js",
-    "check": "find src bin scripts -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "check": "node ./scripts/check-syntax.js",
     "test:markdown": "node ./scripts/test-assistant-markdown.js",
     "test:card-content": "node ./scripts/test-card-reply-content.js",
     "test:media": "node ./scripts/test-media-fixtures.js",

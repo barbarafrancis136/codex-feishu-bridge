@@ -58,7 +58,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
-      accessMode: runtime.config.defaultCodexAccessMode,
+      accessMode: codexParams.accessMode || runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
     runtime.setThreadBindingKey(createdThreadId, bindingKey);
@@ -74,7 +74,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
-      accessMode: runtime.config.defaultCodexAccessMode,
+      accessMode: codexParams.accessMode || runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
     console.log(`[codex-im] turn/start ok workspace=${workspaceRoot} thread=${threadId}`);
@@ -101,7 +101,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       attachments: normalized.attachments || [],
       model: codexParams.model || null,
       effort: codexParams.effort || null,
-      accessMode: runtime.config.defaultCodexAccessMode,
+      accessMode: codexParams.accessMode || runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
     runtime.setThreadBindingKey(recreatedThreadId, bindingKey);

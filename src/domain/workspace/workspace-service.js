@@ -7,6 +7,7 @@ const {
   pathMatchesWorkspaceRoot,
 } = require("../../shared/workspace-paths");
 const {
+  extractAccessValue,
   extractBindPath,
   extractEffortValue,
   extractModelValue,
@@ -372,6 +373,7 @@ async function handleModelCommand(runtime, normalized) {
   runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
     model: resolvedModel,
     effort: current.effort || "",
+    accessMode: current.accessMode || "",
   });
   await runtime.showStatusPanel(normalized, {
     replyToMessageId: normalized.messageId,
@@ -431,10 +433,59 @@ async function handleEffortCommand(runtime, normalized) {
   runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
     model: current.model || "",
     effort: resolvedEffort,
+    accessMode: current.accessMode || "",
   });
   await runtime.showStatusPanel(normalized, {
     replyToMessageId: normalized.messageId,
     noticeText: `已设置推理强度：${resolvedEffort}`,
+  });
+}
+
+async function handleAccessCommand(runtime, normalized) {
+  const workspaceContext = await resolveCodexSettingWorkspaceContext(runtime, normalized);
+  if (!workspaceContext) {
+    return;
+  }
+  const { bindingKey, workspaceRoot } = workspaceContext;
+  const current = runtime.getCodexParamsForWorkspace(bindingKey, workspaceRoot);
+
+  const rawAccess = extractAccessValue(normalized.text);
+  if (!rawAccess) {
+    const effectiveAccess = current.accessMode || normalizeAccessMode(runtime.config.defaultCodexAccessMode) || "default";
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: [
+        `当前项目：\`${workspaceRoot}\``,
+        `访问模式：${effectiveAccess}`,
+        "",
+        "用法：",
+        "`/codex access`",
+        "`/codex access default`",
+        "`/codex access full-access`",
+      ].join("\n"),
+    });
+    return;
+  }
+
+  const resolvedAccess = normalizeAccessMode(rawAccess);
+  if (!resolvedAccess) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: "无效的访问模式。可选：`default` 或 `full-access`。",
+    });
+    return;
+  }
+
+  runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
+    model: current.model || "",
+    effort: current.effort || "",
+    accessMode: resolvedAccess,
+  });
+  await runtime.showStatusPanel(normalized, {
+    replyToMessageId: normalized.messageId,
+    noticeText: `已设置访问模式：${resolvedAccess}`,
   });
 }
 
@@ -604,6 +655,7 @@ async function removeWorkspaceByPath(runtime, normalized, workspaceRoot, { reply
 }
 
 module.exports = {
+  handleAccessCommand,
   handleBindCommand,
   handleEffortCommand,
   handleHelpCommand,
@@ -653,7 +705,7 @@ function parseUpdateDirective(value) {
 
 function applyDefaultCodexParamsOnBind(runtime, bindingKey, workspaceRoot) {
   const current = runtime.sessionStore.getCodexParamsForWorkspace(bindingKey, workspaceRoot);
-  if (current.model || current.effort) {
+  if (current.model || current.effort || current.accessMode) {
     return;
   }
 
@@ -662,13 +714,15 @@ function applyDefaultCodexParamsOnBind(runtime, bindingKey, workspaceRoot) {
   const validatedDefaults = validateDefaultCodexParamsConfig(runtime, availableModels);
   const defaultModel = validatedDefaults.model;
   const defaultEffort = validatedDefaults.effort;
-  if (!defaultModel && !defaultEffort) {
+  const defaultAccessMode = validatedDefaults.accessMode;
+  if (!defaultModel && !defaultEffort && !defaultAccessMode) {
     return;
   }
 
   runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
     model: defaultModel,
     effort: defaultEffort,
+    accessMode: defaultAccessMode,
   });
 }
 
@@ -676,7 +730,8 @@ function validateDefaultCodexParamsConfig(runtime, modelsInput) {
   const models = Array.isArray(modelsInput) ? modelsInput : [];
   const rawModel = normalizeText(runtime.config.defaultCodexModel);
   const rawEffort = normalizeEffort(runtime.config.defaultCodexEffort);
-  const result = { model: "", effort: "" };
+  const rawAccessMode = normalizeAccessMode(runtime.config.defaultCodexAccessMode);
+  const result = { model: "", effort: "", accessMode: rawAccessMode };
   if (!rawModel && !rawEffort) {
     return result;
   }
@@ -707,6 +762,14 @@ async function resolveCodexSettingWorkspaceContext(runtime, normalized) {
 
 function normalizeEffort(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeAccessMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "default" || normalized === "full-access") {
+    return normalized;
+  }
+  return "";
 }
 
 async function loadAvailableModelsForSetting(runtime, normalized, { settingType }) {

@@ -1,4 +1,4 @@
-# Architecture
+﻿# Architecture
 
 `codex-feishu-bridge` is the public core for one job:
 
@@ -99,3 +99,18 @@ CODEX_IM_EXT_REPLY_TAG=
 CODEX_IM_EXT_APPROVAL_AUDIT=true
 CODEX_IM_EXT_USAGE_AUDIT=false
 ```
+
+## Dual-Instance Operating Model
+
+For local + cloud operation, run two independent instances:
+
+- Instance A (local) with Feishu App A
+- Instance B (cloud) with Feishu App B
+
+State isolation is recommended:
+
+- separate `CODEX_IM_SESSIONS_FILE`
+- separate `CODEX_IM_ATTACHMENTS_DIR`
+- separate logs
+
+Share config templates if needed, but do not share runtime state unless you explicitly want coupled behavior.

@@ -1,4 +1,4 @@
-﻿
+
 const { sanitizeAssistantMarkdown } = require("../../shared/assistant-markdown");
 const { normalizeText, resolveEffectiveModelForEffort } = require("../../shared/model-catalog");
 
@@ -634,6 +634,12 @@ function buildHelpCardText() {
       "`/codex effort`",
       "`/codex effort <low|medium|high|xhigh>`",
       "查看/设置当前项目的推理强度覆盖。",
+    ],
+    [
+      "**设置访问模式**",
+      "`/codex access`",
+      "`/codex access <default|full-access>`",
+      "查看/设置当前项目的访问模式。",
     ],
     [
       "**切换 Codex 运行档**",

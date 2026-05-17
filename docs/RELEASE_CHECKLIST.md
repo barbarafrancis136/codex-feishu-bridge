@@ -1,8 +1,26 @@
-# Release Checklist
+﻿# Release Checklist
 
-Use this before publishing a package or pushing a public GitHub release.
+Run before publishing or tagging a release.
 
-## Required Checks
+## 1. Code Health
+
+```sh
+npm run check
+npm run test:markdown
+npm run test:card-content
+npm run test:media
+npm run test:directives
+```
+
+## 2. Security and Packaging
+
+```sh
+npm run privacy:scan
+npm audit --omit=dev
+npm pack --dry-run
+```
+
+## 3. Final Gate
 
 ```sh
 npm run check:release
@@ -15,22 +33,24 @@ This runs:
 - Production dependency audit.
 - `npm pack --dry-run`.
 
-## Manual Review
+## 4. Manual Checks
 
+- `README.md` links are valid.
 - Confirm `README.md` and `docs/使用说明.md` match current behavior.
-- Confirm `docs/OPERATIONS_SYSTEMD_USER.md` and `docs/ops/systemd-user/*` still match runtime behavior.
-- Confirm `scripts/healthcheck-user.sh` remains executable and uses `systemctl --user`.
 - Confirm `.env.example` contains placeholders only.
-- Confirm no `.env`, logs, sessions, screenshots, local caches, or generated tarballs are committed.
-- Confirm `package.json` repository metadata is set only after the real GitHub repository exists.
+- No secrets in repo history or staged changes.
+- `.env` is not tracked.
+- Sessions/attachments/log files are not tracked.
+- `CHANGELOG.md` includes current release notes.
+- `SECURITY.md` reflects current reporting and data handling policy.
 - Confirm private extensions are not included in this repository.
 
-## Versioning
+## 5. Versioning
 
 Before a public release:
 
 1. Update `package.json` version.
 2. Run `npm run check:release`.
 3. Commit with a release-oriented message.
-4. Tag the release, for example `v0.1.0`.
-5. Push the branch and tag.
+4. Tag the release (for example, `v0.1.0`).
+5. Push branch and tags.

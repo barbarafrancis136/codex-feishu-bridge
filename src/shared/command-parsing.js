@@ -1,4 +1,4 @@
-function extractBindPath(text) {
+﻿function extractBindPath(text) {
   return extractCommandArgument(text, "/codex bind ");
 }
 
@@ -26,6 +26,10 @@ function extractProfileValue(text) {
   return extractCommandArgument(text, "/codex profile ");
 }
 
+function extractAccessValue(text) {
+  return extractCommandArgument(text, "/codex access ");
+}
+
 function extractCommandArgument(text, prefix) {
   const trimmed = String(text || "").trim();
   const normalizedPrefix = String(prefix || "").toLowerCase();
@@ -36,6 +40,7 @@ function extractCommandArgument(text, prefix) {
 }
 
 module.exports = {
+  extractAccessValue,
   extractBindPath,
   extractEffortValue,
   extractModelValue,

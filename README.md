@@ -1,60 +1,63 @@
-# codex-feishu-bridge
+﻿# codex-feishu-bridge
 
-`codex-feishu-bridge` 是一个把本机 Codex 接入飞书/Lark 的轻量插件。
+A focused Feishu/Lark bridge for local Codex.
+
+`codex-feishu-bridge` connects Feishu/Lark messages to a local Codex app-server, then sends Codex replies back to Feishu/Lark cards.
 
 ```text
-飞书消息 -> 本机 Codex app-server -> 飞书回复
+Feishu/Lark message -> codex-feishu-bridge -> local Codex app-server -> codex-feishu-bridge -> Feishu/Lark reply
 ```
 
-它的定位很单一：让用户可以在飞书里远程使用本机 Codex，继续同一条 Codex 线程、切换本地项目、选择模型、审批 Codex 动作，并把回复以飞书卡片形式展示。
+中文说明见：[docs/使用说明.md](docs/使用说明.md)
+Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+Linux deployment: [docs/DEPLOY_LINUX.md](docs/DEPLOY_LINUX.md)
+Dual-instance runbook: [docs/DUAL_INSTANCE.md](docs/DUAL_INSTANCE.md)
+Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+24x7 systemd-user ops: [docs/OPERATIONS_SYSTEMD_USER.md](docs/OPERATIONS_SYSTEMD_USER.md)
 
-完整中文说明书见：[docs/使用说明.md](docs/使用说明.md)。
+版本更新记录见：[CHANGELOG.md](CHANGELOG.md)。
 
-架构和维护边界见：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+## What It Does
 
-7×24 部署（`systemd --user`）见：[docs/OPERATIONS_SYSTEMD_USER.md](docs/OPERATIONS_SYSTEMD_USER.md)。
+- Remote Codex chat from Feishu/Lark.
+- Bind a Feishu conversation to one or more local workspaces.
+- Create/switch/resume Codex threads per workspace.
+- Stream replies to Feishu cards.
+- Handle approval requests (approve/reject/workspace-scope allowlist).
+- Inbound image/file/audio intake (download to private cache; images go in as `localImage`).
+- Outbound file send:
+  - Manual: `/codex send <relative-path>`
+  - Automatic directive: `[[codex-feishu-send:relative/path]]`
+- Per-workspace Codex settings:
+  - Model (`/codex model ...`)
+  - Effort (`/codex effort ...`)
+  - Access mode (`/codex access ...`)
 
-版本更新记录见：[CHANGELOG.md](CHANGELOG.md)。当前版本：`0.2.4`。
+## What It Does Not Do
 
-## 它能做什么
+- No private memory/knowledge base.
+- No personal automation or proprietary orchestration bundled in core.
+- No secrets, local logs, private IDs, or personal workspace data in repo.
 
-- 在飞书里和本机 Codex 对话。
-- 把一个飞书会话绑定到一个本地项目目录。
-- 在飞书里创建、切换、恢复 Codex 线程。
-- 查看当前项目、当前线程和最近消息。
-- 设置当前项目使用的模型和推理强度。
-- 停止正在运行的 Codex 任务。
-- 通过飞书审批 Codex 发起的操作请求。
-- 把绑定项目内的文件发送到飞书。
-- 接收飞书图片并作为 Codex 原生图片输入读取。
-- 让 Codex 通过隐藏指令把当前项目内的图片或文件回传到飞书。
-- 用流式飞书卡片展示 Codex 回复、工具执行和 token 用量摘要。
-
-## 它不做什么
-
-- 不内置私有知识库。
-- 不内置私人任务系统。
-- 不内置记忆编译、召回脚本或每日沉淀。
-- 不绑定任何特定团队的项目中枢或自动化系统。
-- 不携带任何密钥、token、私有 ID、本地日志或个人工作区数据。
-
-## 安装
+## Install
 
 ```sh
 npm install -g codex-feishu-bridge
 codex-im feishu-bot
 ```
 
-本地开发运行：
+Local development:
 
 ```sh
 npm install
 npm run feishu-bot
 ```
 
-## 基本配置
+## Configuration
 
-复制 `.env.example` 为 `.env`，填入飞书应用和 Codex 默认参数：
+Copy `.env.example` to `.env`.
+
+Required:
 
 ```text
 FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxxx
@@ -64,29 +67,49 @@ CODEX_IM_DEFAULT_CODEX_EFFORT=medium
 CODEX_IM_DEFAULT_CODEX_ACCESS_MODE=default
 ```
 
-图片和附件会下载到本机私有缓存，默认位置：
+Optional:
 
 ```text
-~/.codex-feishu-bridge/attachments
-```
-
-可选配置：
-
-```text
-CODEX_IM_ATTACHMENTS_DIR=/Users/your-name/.codex-feishu-bridge/attachments
+CODEX_IM_DEFAULT_WORKSPACE_ID=default
+CODEX_IM_WORKSPACE_ALLOWLIST=/absolute/project-a,/absolute/project-b
+CODEX_IM_CODEX_ENDPOINT=
+CODEX_IM_SESSIONS_FILE=/path/to/sessions.json
+CODEX_IM_ATTACHMENTS_DIR=/path/to/attachments
 CODEX_IM_MAX_IMAGE_BYTES=10485760
 CODEX_IM_MAX_ATTACHMENT_BYTES=104857600
 CODEX_IM_FEISHU_RETRY_MAX_ATTEMPTS=3
 CODEX_IM_FEISHU_RETRY_BASE_DELAY_MS=300
+CODEX_IM_EXTENSIONS_FILE=
 ```
 
-配置加载顺序：
+## Third-Party API Proxy / Endpoint
 
-1. 当前目录的 `.env`
-2. `~/.codex-im/.env`
-3. 当前 shell 环境变量
+You can run this bridge with a third-party relay, as long as it matches one of these modes:
 
-## 常用命令
+1. OpenAI-compatible HTTP relay (most common)
+
+Set environment variables used by your Codex runtime process (the bridge inherits process env):
+
+```text
+OPENAI_API_KEY=your_proxy_key
+OPENAI_BASE_URL=https://your-proxy.example.com/v1
+```
+
+2. Codex RPC WebSocket endpoint (advanced)
+
+```text
+CODEX_IM_CODEX_ENDPOINT=wss://your-codex-rpc-endpoint
+```
+
+This must be protocol-compatible with Codex RPC used by this project, not just a generic Chat/Responses REST API.
+
+Security notes:
+
+- Use trusted/self-controlled relay providers whenever possible.
+- Never commit real keys in git; keep them in `.env` only.
+- Use different keys/apps for local and cloud instances.
+
+## Commands
 
 - `/codex bind /absolute/path`
 - `/codex where`
@@ -102,6 +125,8 @@ CODEX_IM_FEISHU_RETRY_BASE_DELAY_MS=300
 - `/codex model <modelId>`
 - `/codex effort`
 - `/codex effort <low|medium|high|xhigh>`
+- `/codex access`
+- `/codex access <default|full-access>`
 - `/codex profile`
 - `/codex profile main`
 - `/codex approve`
@@ -109,42 +134,41 @@ CODEX_IM_FEISHU_RETRY_BASE_DELAY_MS=300
 - `/codex reject`
 - `/codex help`
 
-## 飞书应用要求
+## Feishu/Lark App Setup
 
-事件订阅：
+Event subscriptions:
 
-| 事件 | 标识 |
-| --- | --- |
-| 接收消息 | `im.message.receive_v1` |
-| 卡片回传交互 | `card.action.trigger` |
+- `im.message.receive_v1`
+- `card.action.trigger`
 
-推荐权限：
+Recommended permissions:
 
-| 权限 | 标识 |
-| --- | --- |
-| 创建与更新卡片 | `cardkit:card:write` |
-| 获取卡片信息 | `cardkit:card:read` |
-| 以应用身份发消息 | `im:message:send_as_bot` |
-| 读取用户发给机器人的单聊消息 | `im:message.p2p_msg:readonly` |
-| 发送/删除表情回复 | `im:message.reactions:write_only` |
-| 获取与上传图片或文件资源 | `im:resource` |
+- `cardkit:card:write`
+- `cardkit:card:read`
+- `im:message:send_as_bot`
+- `im:message.p2p_msg:readonly`
+- `im:message.reactions:write_only`
+- `im:resource`
 
-## 媒体附件
+## Open-Source and Dual-Instance Notes
 
-- 收图：飞书/Lark 图片会下载到本地私有缓存，并作为 Codex `localImage` 输入进入当前轮。
-- 收文件/语音：文件和音频会下载到本地私有缓存；文本类文件会附带安全预览，二进制文件和音频先传元信息与本地路径。
-- 手动回传：`/codex send <当前项目下的相对文件路径>` 会自动按类型发送，图片走飞书图片消息，`.opus/.mp4` 走音频消息，其他文件走普通文件消息。
-- 自动回传：Codex 回复中可包含独立一行隐藏指令 `[[codex-feishu-send:relative/path/from/workspace]]`，桥会上传该文件并从飞书发出，同时从展示文本中移除指令。
+- Keep core bridge reusable; attach private features via extension points.
+- For local + cloud deployment, use two separate Feishu apps/bots.
+- Do not share session files between instances unless you explicitly want coupled state.
+- Recommended: share config templates only, keep runtime state isolated.
 
-## 开发检查
+## Release Checks
 
 ```sh
 npm run check
+npm run test:markdown
+npm run test:card-content
 npm run test:media
 npm run test:directives
 npm run privacy:scan
 npm audit --omit=dev
 npm pack --dry-run
+npm run check:release
 ```
 
 ## License

@@ -562,6 +562,7 @@ function attachRuntimeForwarders() {
     handleSendCommand: workspaceRuntime.handleSendCommand,
     handleModelCommand: workspaceRuntime.handleModelCommand,
     handleEffortCommand: workspaceRuntime.handleEffortCommand,
+    handleAccessCommand: workspaceRuntime.handleAccessCommand,
     refreshWorkspaceThreads: threadRuntime.refreshWorkspaceThreads,
     describeWorkspaceStatus: threadRuntime.describeWorkspaceStatus,
     switchThreadById: threadRuntime.switchThreadById,

@@ -1,4 +1,4 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const { normalizeModelCatalog } = require("../../shared/model-catalog");
 
@@ -112,30 +112,35 @@ class SessionStore {
   getCodexParamsForWorkspace(bindingKey, workspaceRoot) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
-      return { model: "", effort: "" };
+      return { model: "", effort: "", accessMode: "" };
     }
     const raw = this.state.bindings[bindingKey]?.codexParamsByWorkspaceRoot?.[normalizedWorkspaceRoot];
     if (!raw || typeof raw !== "object") {
-      return { model: "", effort: "" };
+      return { model: "", effort: "", accessMode: "" };
     }
     return {
       model: normalizeValue(raw.model),
       effort: normalizeValue(raw.effort),
+      accessMode: normalizeAccessMode(raw.accessMode),
     };
   }
 
-  setCodexParamsForWorkspace(bindingKey, workspaceRoot, { model, effort }) {
+  setCodexParamsForWorkspace(bindingKey, workspaceRoot, nextParams = {}) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return this.getBinding(bindingKey);
     }
 
     const current = this.getBinding(bindingKey) || {};
+    const currentParams = this.getCodexParamsForWorkspace(bindingKey, normalizedWorkspaceRoot);
     const codexParamsByWorkspaceRoot = {
       ...getCodexParamsMap(current),
       [normalizedWorkspaceRoot]: {
-        model: normalizeValue(model),
-        effort: normalizeValue(effort),
+        model: hasOwn(nextParams, "model") ? normalizeValue(nextParams.model) : currentParams.model,
+        effort: hasOwn(nextParams, "effort") ? normalizeValue(nextParams.effort) : currentParams.effort,
+        accessMode: hasOwn(nextParams, "accessMode")
+          ? normalizeAccessMode(nextParams.accessMode)
+          : currentParams.accessMode,
       },
     };
 
@@ -270,6 +275,14 @@ function normalizeValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeAccessMode(value) {
+  const normalized = normalizeValue(value).toLowerCase();
+  if (normalized === "default" || normalized === "full-access") {
+    return normalized;
+  }
+  return "";
+}
+
 function createEmptyState() {
   return {
     bindings: {},
@@ -305,6 +318,10 @@ function normalizeCommandAllowlist(allowlist) {
   return allowlist
     .map((tokens) => normalizeCommandTokens(tokens))
     .filter((tokens) => tokens.length > 0);
+}
+
+function hasOwn(objectValue, key) {
+  return !!objectValue && Object.prototype.hasOwnProperty.call(objectValue, key);
 }
 
 module.exports = { SessionStore };

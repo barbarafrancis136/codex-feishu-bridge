@@ -1,4 +1,4 @@
-const codexMessageUtils = require("../../infra/codex/message-utils");
+﻿const codexMessageUtils = require("../../infra/codex/message-utils");
 
 const RICH_TEXT_MESSAGE_TYPES = new Set([
   "interactive",
@@ -432,6 +432,7 @@ function parseCommand(text) {
     new: ["new"],
     model: ["model"],
     effort: ["effort"],
+    access: ["access"],
     profile: ["profile"],
     approve: ["approve", "approve workspace"],
     reject: ["reject"],
@@ -460,6 +461,9 @@ function parseCommand(text) {
   }
   if (matchesPrefixCommand(normalized, "effort")) {
     return "effort";
+  }
+  if (matchesPrefixCommand(normalized, "access")) {
+    return "access";
   }
   if (matchesPrefixCommand(normalized, "profile")) {
     return "profile";
@@ -514,3 +518,5 @@ module.exports = {
   normalizeCardActionContext,
   normalizeFeishuTextEvent,
 };
+
+
