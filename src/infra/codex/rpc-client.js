@@ -294,6 +294,9 @@ class CodexRpcClient {
         const pending = this.pending.get(id);
         this.pending.delete(id);
         if (pending) {
+          // This request promise is not returned when sendRaw fails, so attach
+          // a local sink to avoid an unhandled rejection crashing Node.js.
+          responsePromise.catch(() => {});
           pending.reject(error);
         }
         if (!this.shouldRecoverFromSendError(error) || attempt >= maxRetries || method === "initialize") {
