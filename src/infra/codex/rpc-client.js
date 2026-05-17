@@ -35,6 +35,7 @@ class CodexRpcClient {
     this.pending = new Map();
     this.isReady = false;
     this.messageListeners = new Set();
+    this.reconnectPromise = null;
   }
 
   async connect() {
@@ -260,38 +261,56 @@ class CodexRpcClient {
   }
 
   async sendRequest(method, params, options = {}) {
-    const id = createRequestId();
-    const payload = JSON.stringify({ id, method, params });
     const timeoutMs = options.timeoutMs || this.getRequestTimeoutMs(method);
+    const maxRetries = this.mode === "spawn" ? 1 : 0;
+    let attempt = 0;
 
-    const responsePromise = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Codex RPC ${method} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
+    while (true) {
+      const id = createRequestId();
+      const payload = JSON.stringify({ id, method, params });
+
+      const responsePromise = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`Codex RPC ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        this.pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
       });
-    });
 
-    logCodexOutboundMessage(`request:${method}`, payload);
-    try {
-      this.sendRaw(payload);
-    } catch (error) {
-      const pending = this.pending.get(id);
-      this.pending.delete(id);
-      if (pending) {
-        pending.reject(error);
+      logCodexOutboundMessage(`request:${method}`, payload);
+      try {
+        this.sendRaw(payload);
+        return responsePromise;
+      } catch (error) {
+        const pending = this.pending.get(id);
+        this.pending.delete(id);
+        if (pending) {
+          pending.reject(error);
+        }
+        if (!this.shouldRecoverFromSendError(error) || attempt >= maxRetries || method === "initialize") {
+          throw error;
+        }
+        attempt += 1;
+        logger.warn("Codex request send failed; trying to recover app-server", {
+          method,
+          attempt,
+          error: normalizeErrorForLog(error),
+        });
+        await this.recoverSpawnConnection(`sendRequest:${method}`);
+        if (!this.isReady) {
+          await this.initialize();
+        }
       }
     }
-    return responsePromise;
   }
 
   async sendNotification(method, params) {
@@ -319,6 +338,64 @@ class CodexRpcClient {
       throw new Error("Codex process stdin is not writable");
     }
     this.child.stdin.write(`${payload}\n`);
+  }
+
+  shouldRecoverFromSendError(error) {
+    if (this.mode !== "spawn") {
+      return false;
+    }
+    const message = String(error?.message || "");
+    return message.includes("stdin is not writable")
+      || message.includes("app-server exited")
+      || error?.code === "EPIPE"
+      || error?.code === "ERR_STREAM_DESTROYED";
+  }
+
+  async recoverSpawnConnection(reason = "") {
+    if (this.mode !== "spawn") {
+      throw new Error("recoverSpawnConnection only supports spawn mode");
+    }
+    if (this.reconnectPromise) {
+      await this.reconnectPromise;
+      return;
+    }
+
+    this.reconnectPromise = (async () => {
+      logger.warn("recovering Codex app-server connection", { reason });
+      this.isReady = false;
+      this.rejectAllPending(new Error("Codex app-server reconnecting"));
+
+      if (this.child) {
+        const child = this.child;
+        this.child = null;
+        await new Promise((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          };
+          child.once("close", finish);
+          child.once("exit", finish);
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            finish();
+          }
+          setTimeout(finish, 2000);
+        });
+      }
+
+      this.stdoutBuffer = "";
+      await this.connectSpawn();
+    })();
+
+    try {
+      await this.reconnectPromise;
+    } finally {
+      this.reconnectPromise = null;
+    }
   }
 
   handleIncoming(rawMessage) {
@@ -452,6 +529,17 @@ function summarizeCodexMessage(message) {
 function logCodexParseFailure(rawMessage) {
   const sample = String(rawMessage || "").slice(0, 300);
   logger.warn("codex parse failed", { rawSample: sample });
+}
+
+function normalizeErrorForLog(error) {
+  if (!error) {
+    return { message: "unknown error" };
+  }
+  return {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+  };
 }
 
 function resolveDefaultCodexCommand(env = process.env) {
