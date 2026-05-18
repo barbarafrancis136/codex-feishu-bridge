@@ -38,8 +38,10 @@ class Mem0Client {
       `${this.baseUrl}/v3/memories/search/`,
       {
         query,
-        user_id: userId,
-        limit: this.searchLimit,
+        filters: {
+          user_id: userId,
+        },
+        top_k: this.searchLimit,
       },
       {
         headers: this.buildHeaders(),
