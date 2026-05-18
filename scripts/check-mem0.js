@@ -1,4 +1,9 @@
+const path = require("path");
+const fs = require("fs");
+const dotenv = require("dotenv");
 const { Mem0Client } = require("../src/infra/memory/mem0-client");
+
+loadEnv();
 
 async function main() {
   const client = new Mem0Client({
@@ -45,3 +50,10 @@ main().catch((error) => {
   }, null, 2));
   process.exit(1);
 });
+
+function loadEnv() {
+  const envPath = path.join(process.cwd(), ".env");
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
