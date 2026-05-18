@@ -42,6 +42,7 @@
   "scripts": {
     "feishu-bot": "node ./bin/codex-im.js",
     "check": "node ./scripts/check-syntax.js",
+    "check:mem0": "node ./scripts/check-mem0.js",
     "test:markdown": "node ./scripts/test-assistant-markdown.js",
     "test:card-content": "node ./scripts/test-card-reply-content.js",
     "test:media": "node ./scripts/test-media-fixtures.js",

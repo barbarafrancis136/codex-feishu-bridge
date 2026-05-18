@@ -69,6 +69,7 @@ function handleCodexMessage(runtime, message) {
   if (context) {
     outbound.payload.chatId = context.chatId;
     outbound.payload.threadKey = context.threadKey;
+    outbound.payload.normalized = context;
   }
 
   if (codexMessageUtils.eventShouldClearPendingReaction(outbound)) {

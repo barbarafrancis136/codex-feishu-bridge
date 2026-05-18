@@ -628,15 +628,6 @@ async function removeWorkspaceByPath(runtime, normalized, workspaceRoot, { reply
 
   const { bindingKey } = runtime.getBindingContext(normalized);
   const currentWorkspaceRoot = runtime.resolveWorkspaceRootForBinding(bindingKey);
-  if (currentWorkspaceRoot && currentWorkspaceRoot === targetWorkspaceRoot) {
-    await runtime.sendInfoCardMessage({
-      chatId: normalized.chatId,
-      replyToMessageId: replyToMessageId || normalized.messageId,
-      text: "当前项目不支持移除，请先切换到其他项目。",
-    });
-    return;
-  }
-
   const binding = runtime.sessionStore.getBinding(bindingKey) || {};
   const items = runtime.listBoundWorkspaces(binding);
   if (!items.some((item) => item.workspaceRoot === targetWorkspaceRoot)) {
@@ -646,6 +637,19 @@ async function removeWorkspaceByPath(runtime, normalized, workspaceRoot, { reply
       text: "该项目未绑定到当前会话，无需移除。",
     });
     return;
+  }
+
+  if (currentWorkspaceRoot && currentWorkspaceRoot === targetWorkspaceRoot) {
+    const fallbackWorkspaceRoot = items.find((item) => item.workspaceRoot !== targetWorkspaceRoot)?.workspaceRoot || "";
+    if (fallbackWorkspaceRoot) {
+      runtime.sessionStore.setActiveWorkspaceRoot(bindingKey, fallbackWorkspaceRoot);
+      await runtime.resolveWorkspaceThreadState({
+        bindingKey,
+        workspaceRoot: fallbackWorkspaceRoot,
+        normalized,
+        autoSelectThread: true,
+      });
+    }
   }
 
   runtime.sessionStore.removeWorkspace(bindingKey, targetWorkspaceRoot);

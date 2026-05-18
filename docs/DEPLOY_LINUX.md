@@ -32,6 +32,13 @@ FEISHU_APP_SECRET=xxx_cloud_secret
 CODEX_IM_DEFAULT_CODEX_MODEL=gpt-5.3-codex
 CODEX_IM_DEFAULT_CODEX_EFFORT=medium
 CODEX_IM_DEFAULT_CODEX_ACCESS_MODE=default
+CODEX_IM_EXTENSIONS_FILE=./extensions/mem0-extension.js
+MEM0_ENABLED=true
+MEM0_BASE_URL=https://api.mem0.ai
+MEM0_API_KEY=m0_xxx
+MEM0_USER_ID_PREFIX=feishu
+MEM0_SEARCH_LIMIT=5
+MEM0_TIMEOUT_MS=15000
 CODEX_IM_SESSIONS_FILE=/srv/codex-feishu-bridge/state/sessions-cloud.json
 CODEX_IM_ATTACHMENTS_DIR=/srv/codex-feishu-bridge/state/attachments
 ```
@@ -41,6 +48,7 @@ CODEX_IM_ATTACHMENTS_DIR=/srv/codex-feishu-bridge/state/attachments
 ```sh
 cd /srv/codex-feishu-bridge/app
 npm install
+npm run check:mem0
 npm run feishu-bot
 ```
 
@@ -84,6 +92,7 @@ Minimal checks:
 ```sh
 sudo systemctl is-active codex-feishu-bridge
 sudo journalctl -u codex-feishu-bridge -n 50 --no-pager
+cd /srv/codex-feishu-bridge/app && npm run check:mem0
 ```
 
 Behavior checks (in Feishu):

@@ -109,6 +109,23 @@ Security notes:
 - Never commit real keys in git; keep them in `.env` only.
 - Use different keys/apps for local and cloud instances.
 
+## Optional Mem0 Memory Extension
+
+This repo keeps personal memory out of core, but you can enable Mem0 through the extension hook:
+
+```text
+CODEX_IM_EXTENSIONS_FILE=./extensions/mem0-extension.js
+MEM0_ENABLED=true
+MEM0_BASE_URL=https://api.mem0.ai
+MEM0_API_KEY=m0_xxx
+```
+
+Behavior:
+
+- Before a normal user message is sent to Codex, the extension searches Mem0 with the Feishu sender as `user_id`.
+- After Codex produces a reply, the extension writes the user message and assistant reply back into Mem0.
+- `/codex ...` management commands are ignored by the memory extension.
+
 ## Commands
 
 - `/codex bind /absolute/path`
