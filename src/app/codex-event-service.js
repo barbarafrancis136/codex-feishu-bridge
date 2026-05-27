@@ -1,8 +1,16 @@
 const codexMessageUtils = require("../infra/codex/message-utils");
 const attachmentDirectives = require("../domain/attachments/outbound-directive-service");
+const bridgeWakeupService = require("../domain/automation/bridge-wakeup-service");
 const { formatFailureText } = require("../shared/error-text");
 const { createLogger } = require("../shared/logger");
 const logger = createLogger("codex-events");
+const HIDDEN_DIRECTIVE_RE = /\[\[(?:codex-goal-state|codex-memory-evolution|codex-feishu-wakeup):[\s\S]*?\]\]/g;
+const HIDDEN_DIRECTIVE_START_MARKERS = Object.freeze([
+  "[[codex-goal-state:",
+  "[[codex-memory-evolution:",
+  "[[codex-feishu-wakeup:",
+]);
+const HIDDEN_DIRECTIVE_END = "]]";
 
 async function handleStopCommand(runtime, normalized) {
   const { bindingKey, workspaceRoot } = runtime.getBindingContext(normalized);
@@ -282,20 +290,49 @@ async function deliverToFeishu(runtime, event) {
       event,
       runtime,
     });
+    const finalizedText = applyMergeForwardReplyMarker(
+      event.payload?.normalized,
+      event.payload?.mode,
+      hookedText
+    );
+    const displayText = attachmentDirectives.stripSendDirectivesForDisplay(finalizedText);
+    const correctedText = correctAttachmentFailureMisdiagnosis(
+      event.payload?.normalized,
+      displayText,
+      event.payload?.threadId || ""
+    );
+    const wakeupResult = bridgeWakeupService.extractAndStoreWakeupDirectives(runtime, {
+      text: correctedText,
+      threadId: event.payload.threadId || "",
+      turnId: event.payload.turnId || "",
+      chatId: event.payload.chatId || "",
+      normalized: event.payload?.normalized || null,
+    });
+    const visibleText = stripHiddenGoalStateDirectiveForDisplay(runtime, {
+      threadId: event.payload.threadId || "",
+      turnId: event.payload.turnId || "",
+      text: wakeupResult.visibleText,
+      mode: event.payload.mode || "delta",
+    });
     const attachmentResult = await attachmentDirectives.handleOutboundAttachmentDirectives(runtime, {
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       chatId: event.payload.chatId,
-      text: hookedText,
+      text: finalizedText,
     });
     if (!attachmentResult.text && attachmentResult.sent > 0) {
+      await runtime.flushAssistantReplyCardNow({
+        threadId: event.payload.threadId,
+        turnId: event.payload.turnId || "",
+      }).catch(() => {});
+      runtime.cleanupThreadRuntimeState(event.payload.threadId || "");
       return;
     }
     await runtime.upsertAssistantReplyCard({
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       chatId: event.payload.chatId,
-      text: attachmentResult.text,
+      text: visibleText,
       mode: event.payload.mode || "delta",
       state: "streaming",
       deferFlush: !runtime.config.feishuStreamingOutput,
@@ -383,8 +420,227 @@ function isTerminalTurnMessage(message) {
     || /stream disconnected/i.test(errorDetails);
 }
 
+function correctAttachmentFailureMisdiagnosis(normalized, text, threadId = "") {
+  const rawText = String(text || "");
+  if (!rawText) {
+    return rawText;
+  }
+
+  const receipt = normalized?.attachmentReceipt || null;
+  const attachments = Array.isArray(normalized?.attachments) ? normalized.attachments : [];
+  const imageAttachments = attachments.filter((attachment) => attachment?.kind === "image" && attachment?.filePath);
+  const imageDelivered = Boolean(
+    imageAttachments.length
+    && receipt?.stages?.received?.status === "success"
+    && receipt?.stages?.cached?.status === "success"
+    && receipt?.stages?.delivered?.status === "success"
+  );
+  if (!imageDelivered) {
+    return rawText;
+  }
+
+  if (!looksLikeImageMountFailureText(rawText)) {
+    return rawText;
+  }
+
+  const filePath = imageAttachments[0]?.filePath || "";
+  logger.warn("corrected misleading image-mount diagnosis", {
+    threadId,
+    messageId: normalized?.messageId || "",
+    filePath,
+  });
+
+  return [
+    "这次不能把原因归结为“文件不存在”。桥已经确认这张图片链路是成功的：",
+    "1. 飞书图片已收到",
+    `2. 图片已落盘到本地缓存：\`${filePath}\``,
+    "3. 图片已作为 `localImage` 送入 Codex",
+    "",
+    "当前更可能是这套模型或端点没有真正处理本轮视觉输入，而不是挂载失败。",
+    "如果后面我还是给不出图片里的可见细节，那就说明是当前 provider 的视觉能力未打通。",
+  ].join("\n");
+}
+
+function applyMergeForwardReplyMarker(normalized, mode, text) {
+  const rawText = String(text || "");
+  if (!rawText) {
+    return rawText;
+  }
+  if (String(normalized?.messageType || "").trim().toLowerCase() !== "merge_forward") {
+    return rawText;
+  }
+  if (String(mode || "").trim() !== "completed_snapshot") {
+    return rawText;
+  }
+  const status = String(normalized?.mergeForwardStatus || "received").trim() || "received";
+  const marker = `[bridge merge_forward:v2 active | status=${status}]`;
+  if (rawText.startsWith(marker)) {
+    return rawText;
+  }
+  return `${marker}\n\n${rawText}`;
+}
+
+function stripHiddenGoalStateDirectiveForDisplay(runtime, {
+  threadId = "",
+  turnId = "",
+  text,
+  mode = "delta",
+} = {}) {
+  const rawText = typeof text === "string" ? text : "";
+  if (!rawText) {
+    return rawText;
+  }
+
+  const normalizedMode = String(mode || "").trim();
+  const runKey = resolveGoalDirectiveRunKey(runtime, threadId, turnId);
+  if (normalizedMode === "completed_snapshot") {
+    if (runKey) {
+      ensureGoalDirectiveDisplayStateMap(runtime).delete(runKey);
+    }
+    return rawText.replace(HIDDEN_DIRECTIVE_RE, "");
+  }
+
+  if (!runKey) {
+    return rawText.replace(HIDDEN_DIRECTIVE_RE, "");
+  }
+
+  const stateMap = ensureGoalDirectiveDisplayStateMap(runtime);
+  const currentState = stateMap.get(runKey) || createEmptyGoalDirectiveDisplayState();
+  const nextState = createEmptyGoalDirectiveDisplayState(currentState);
+  let input = `${currentState.pendingPrefix}${rawText}`;
+  let visibleText = "";
+
+  while (input) {
+    if (nextState.insideDirective) {
+      const endIndex = input.indexOf(HIDDEN_DIRECTIVE_END);
+      if (endIndex === -1) {
+        input = "";
+        break;
+      }
+      nextState.insideDirective = false;
+      input = input.slice(endIndex + HIDDEN_DIRECTIVE_END.length);
+      continue;
+    }
+
+    const startMatch = findHiddenDirectiveStart(input);
+    if (startMatch.index >= 0) {
+      visibleText += input.slice(0, startMatch.index);
+      input = input.slice(startMatch.index + startMatch.marker.length);
+      nextState.insideDirective = true;
+      continue;
+    }
+
+    const pendingPrefixLength = getGoalDirectivePendingPrefixLength(input);
+    if (pendingPrefixLength > 0) {
+      const safeLength = input.length - pendingPrefixLength;
+      if (safeLength > 0) {
+        visibleText += input.slice(0, safeLength);
+      }
+      nextState.pendingPrefix = input.slice(safeLength);
+    } else {
+      visibleText += input;
+    }
+    input = "";
+  }
+
+  if (nextState.insideDirective || nextState.pendingPrefix) {
+    stateMap.set(runKey, nextState);
+  } else {
+    stateMap.delete(runKey);
+  }
+  return visibleText;
+}
+
+function resolveGoalDirectiveRunKey(runtime, threadId, turnId) {
+  const normalizedThreadId = String(threadId || "").trim();
+  if (!normalizedThreadId) {
+    return "";
+  }
+  const normalizedTurnId = String(turnId || "").trim()
+    || runtime?.activeTurnIdByThreadId?.get(normalizedThreadId)
+    || codexMessageUtils.extractTurnIdFromRunKey(runtime?.currentRunKeyByThreadId?.get(normalizedThreadId) || "")
+    || "";
+  return codexMessageUtils.buildRunKey(normalizedThreadId, normalizedTurnId);
+}
+
+function ensureGoalDirectiveDisplayStateMap(runtime) {
+  if (!(runtime?.hiddenGoalDirectiveStateByRunKey instanceof Map)) {
+    runtime.hiddenGoalDirectiveStateByRunKey = new Map();
+  }
+  return runtime.hiddenGoalDirectiveStateByRunKey;
+}
+
+function createEmptyGoalDirectiveDisplayState(current = null) {
+  return {
+    insideDirective: Boolean(current?.insideDirective),
+    pendingPrefix: typeof current?.pendingPrefix === "string" ? current.pendingPrefix : "",
+  };
+}
+
+function findHiddenDirectiveStart(input) {
+  const rawText = String(input || "");
+  let bestIndex = -1;
+  let bestMarker = "";
+  HIDDEN_DIRECTIVE_START_MARKERS.forEach((marker) => {
+    const index = rawText.indexOf(marker);
+    if (index === -1) {
+      return;
+    }
+    if (bestIndex === -1 || index < bestIndex) {
+      bestIndex = index;
+      bestMarker = marker;
+    }
+  });
+  return {
+    index: bestIndex,
+    marker: bestMarker,
+  };
+}
+
+function getGoalDirectivePendingPrefixLength(input) {
+  const rawText = String(input || "");
+  const longestMarker = HIDDEN_DIRECTIVE_START_MARKERS.reduce(
+    (max, marker) => Math.max(max, marker.length),
+    0
+  );
+  const maxLength = Math.min(rawText.length, Math.max(0, longestMarker - 1));
+  for (let length = maxLength; length > 0; length -= 1) {
+    const suffix = rawText.slice(-length);
+    if (HIDDEN_DIRECTIVE_START_MARKERS.some((marker) => marker.startsWith(suffix))) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function looksLikeImageMountFailureText(text) {
+  const rawText = String(text || "");
+  if (!rawText) {
+    return false;
+  }
+  const lower = rawText.toLowerCase();
+  return [
+    "no such file or directory",
+    "file does not exist",
+    "cannot read the image",
+    "can't read the image",
+    "still can't see the image",
+  ].some((fragment) => lower.includes(fragment))
+    || [
+      "文件不存在",
+      "附件文件仍然不存在",
+      "读不到图",
+      "看不到图",
+      "没成功挂载",
+      "图片还是没成功挂载",
+      "我还是读不到图",
+      "我看不到内容",
+    ].some((fragment) => rawText.includes(fragment));
+}
+
 module.exports = {
   deliverToFeishu,
   handleCodexMessage,
   handleStopCommand,
+  stripHiddenGoalStateDirectiveForDisplay,
 };

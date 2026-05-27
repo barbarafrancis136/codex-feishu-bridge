@@ -25,7 +25,7 @@ Local `.env` (example):
 
 ```text
 FEISHU_APP_ID=cli_xxx_local
-FEISHU_APP_SECRET=xxx_local_secret
+FEISHU_APP_SECRET=YOUR_FEISHU_APP_SECRET
 CODEX_IM_SESSIONS_FILE=/Users/you/.codex-im/sessions-local.json
 CODEX_IM_ATTACHMENTS_DIR=/Users/you/.codex-feishu-bridge/attachments-local
 ```
@@ -34,7 +34,7 @@ Cloud `.env` (example):
 
 ```text
 FEISHU_APP_ID=cli_xxx_cloud
-FEISHU_APP_SECRET=xxx_cloud_secret
+FEISHU_APP_SECRET=YOUR_FEISHU_APP_SECRET
 CODEX_IM_SESSIONS_FILE=/srv/codex-feishu-bridge/state/sessions-cloud.json
 CODEX_IM_ATTACHMENTS_DIR=/srv/codex-feishu-bridge/state/attachments
 ```

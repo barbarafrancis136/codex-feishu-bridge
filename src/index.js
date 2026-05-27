@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
 const { readConfig } = require("./infra/config/config");
 const { FeishuBotRuntime } = require("./app/feishu-bot-runtime");
 const { createLogger } = require("./shared/logger");
+const { ensureMorningBriefingSkill } = require("./morning/skill-bootstrap");
 
 const logger = createLogger("process");
 
@@ -37,9 +38,13 @@ async function main() {
   installProcessGuards();
   loadEnv();
   const config = readConfig();
+  if (config.bridgeMode === "standard") {
+    ensureMorningBriefingSkill(config.skillRoot);
+  }
 
   if (!config.mode || config.mode === "feishu-bot") {
     const runtime = new FeishuBotRuntime(config);
+    installShutdownHandlers(runtime);
     await runtime.start();
     return;
   }
@@ -58,6 +63,36 @@ function installProcessGuards() {
     logger.error("uncaught exception", { error: normalizeProcessError(error) });
     process.exit(1);
   });
+}
+
+function installShutdownHandlers(runtime) {
+  let shuttingDown = false;
+  const handleSignal = (signal) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    const forceExitTimer = setTimeout(() => {
+      process.exit(0);
+    }, 8000);
+    if (typeof forceExitTimer.unref === "function") {
+      forceExitTimer.unref();
+    }
+    Promise.resolve(runtime?.shutdownGracefully?.({ signal }))
+      .catch((error) => {
+        logger.error("graceful shutdown failed", {
+          signal,
+          error: normalizeProcessError(error),
+        });
+      })
+      .finally(() => {
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+      });
+  };
+
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+  process.on("SIGINT", () => handleSignal("SIGINT"));
 }
 
 function normalizeProcessError(error) {

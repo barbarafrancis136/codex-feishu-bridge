@@ -23,6 +23,14 @@ generated/
 probe-*.jpg
 test-vision.jpg
 bridge-restart.*.log
+.codex-backups/
+.deploy-backups/
+analytics_report_*.csv
+analytics_report_*.json
+debug-*.js
+*.bak
+*.bak-*
+*.bak.
 
 .DS_Store
 Thumbs.db
@@ -44,3 +52,5 @@ Thumbs.db
 /extensions/mem0-extension.js
 /src/infra/memory/
 /scripts/check-mem0.js
+/prompts/morning-briefing-smoke.md
+/prompts/reply-style-structured.md

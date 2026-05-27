@@ -37,6 +37,14 @@ Design every new capability as either public core or extension-facing surface:
 
 If a feature requires private data, private paths, private automation, or a named personal workflow, keep it out of this repository and document only the generic hook it needs.
 
+## Codex Workflow
+
+- Prefer issue-style requests: objective, scope, constraints, and verification.
+- Keep changes small and local. If work expands, split it into stages.
+- Read the relevant docs and tests before editing code.
+- After changes, run `npm run check:release` when feasible and report blockers clearly.
+- For the full workflow guide, see [docs/CODEX_WORKFLOW.md](docs/CODEX_WORKFLOW.md).
+
 ## Development
 
 Before committing or publishing, run:

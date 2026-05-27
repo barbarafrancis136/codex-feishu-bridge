@@ -2,7 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const {
   isAbsoluteWorkspacePath,
+  isPathStyleCompatibleWithRuntime,
   isWorkspaceAllowed,
+  formatRuntimePlatformLabel,
   normalizeWorkspacePath,
   pathMatchesWorkspaceRoot,
 } = require("../../shared/workspace-paths");
@@ -10,9 +12,12 @@ const {
   extractAccessValue,
   extractBindPath,
   extractEffortValue,
+  extractGoalValue,
   extractModelValue,
+  extractPluginValue,
   extractRemoveWorkspacePath,
   extractSendPath,
+  extractSkillValue,
 } = require("../../shared/command-parsing");
 const {
   extractModelCatalogFromListResponse,
@@ -26,6 +31,18 @@ const {
 } = require("../../shared/media-types");
 const codexMessageUtils = require("../../infra/codex/message-utils");
 const { formatFailureText } = require("../../shared/error-text");
+const {
+  describePluginInstall,
+  ensureGithubPluginInstall,
+  ensureMarketplaceEntry,
+  ensurePluginManifest,
+  ensurePluginSkeleton,
+  listInstalledPlugins,
+  listMarketplacePlugins,
+  normalizePluginName,
+  readPluginManifest,
+  toDisplayName,
+} = require("../../infra/plugins/plugin-registry");
 
 const MAX_FEISHU_UPLOAD_FILE_BYTES = 30 * 1024 * 1024;
 const MAX_FEISHU_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -35,7 +52,7 @@ async function resolveWorkspaceContext(
   normalized,
   {
     replyToMessageId = "",
-    missingWorkspaceText = "当前会话还没有绑定项目。",
+    missingWorkspaceText = buildMissingWorkspaceBindingText(),
   } = {}
 ) {
   const replyTarget = runtime.resolveReplyToMessageId(normalized, replyToMessageId);
@@ -59,7 +76,7 @@ async function handleBindCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "用法: `/codex bind /绝对路径`",
+      text: "用法：`/codex bind /绝对路径`",
     });
     return;
   }
@@ -69,7 +86,15 @@ async function handleBindCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "只支持绝对路径绑定。Windows 例如 `C:\\code\\repo`，macOS/Linux 例如 `/Users/name/repo`。",
+      text: "只支持绝对路径绑定。Windows 例如 `C:\\code\\repo`，Linux/macOS 例如 `/root/project`。",
+    });
+    return;
+  }
+  if (!isPathStyleCompatibleWithRuntime(workspaceRoot, process.platform)) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: buildWorkspacePathStyleMismatchText(runtime, workspaceRoot),
     });
     return;
   }
@@ -87,16 +112,15 @@ async function handleBindCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: `项目不存在: ${workspaceRoot}`,
+      text: buildWorkspaceNotAccessibleText(runtime, workspaceRoot),
     });
     return;
   }
-
   if (!workspaceStats.isDirectory) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: `路径非法: ${workspaceRoot}`,
+      text: `路径存在，但不是目录：${workspaceRoot}`,
     });
     return;
   }
@@ -107,14 +131,101 @@ async function handleBindCommand(runtime, normalized) {
   const existingThreadId = runtime.resolveThreadIdForBinding(bindingKey, workspaceRoot);
   await showStatusPanel(runtime, normalized, {
     replyToMessageId: normalized.messageId,
-    noticeText: existingThreadId
-      ? "已切换到项目，并恢复原会话上下文。"
-      : "已绑定项目。",
+    noticeText: existingThreadId ? "已切换到项目，并恢复原会话上下文。" : "已绑定项目。",
   });
 }
 
 async function handleWhereCommand(runtime, normalized) {
   await showStatusPanel(runtime, normalized);
+}
+
+async function handleDoctorCommand(runtime, normalized) {
+  const { bindingKey, workspaceRoot } = runtime.getBindingContext(normalized);
+  const doctorText = await runtime.buildDoctorText({ bindingKey, workspaceRoot });
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
+    replyToMessageId: normalized.messageId,
+    text: doctorText,
+  });
+}
+
+async function handleGoalCommand(runtime, normalized) {
+  const { bindingKey, workspaceRoot } = runtime.getBindingContext(normalized);
+  const rawGoal = extractGoalValue(normalized.text);
+  const currentGoal = workspaceRoot
+    ? runtime.sessionStore.getGoalForWorkspace(bindingKey, workspaceRoot)
+    : runtime.sessionStore.getChatGoal(bindingKey);
+
+  if (!rawGoal) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: workspaceRoot
+        ? buildGoalCommandText(workspaceRoot, currentGoal)
+        : buildChatGoalCommandText(currentGoal),
+    });
+    return;
+  }
+
+  if (rawGoal.trim().toLowerCase() === "clear") {
+    if (workspaceRoot) {
+      runtime.sessionStore.setGoalForWorkspace(bindingKey, workspaceRoot, "");
+      await runtime.showStatusPanel(normalized, {
+        replyToMessageId: normalized.messageId,
+        noticeText: "已清除当前项目目标。",
+      });
+      return;
+    }
+    runtime.sessionStore.setChatGoal(bindingKey, "");
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: `已清除当前会话目标。\n\n${buildChatGoalCommandText("")}`,
+    });
+    return;
+  }
+
+  if (workspaceRoot) {
+    runtime.sessionStore.setGoalForWorkspace(bindingKey, workspaceRoot, rawGoal);
+    await runtime.showStatusPanel(normalized, {
+      replyToMessageId: normalized.messageId,
+      noticeText: "已更新当前项目目标。",
+    });
+    return;
+  }
+
+  runtime.sessionStore.setChatGoal(bindingKey, rawGoal);
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
+    replyToMessageId: normalized.messageId,
+    text: `已更新当前会话目标。\n\n${buildChatGoalCommandText(rawGoal)}`,
+  });
+}
+
+async function handleScoreCommand(runtime, normalized) {
+  await handleOptimizationSurfaceCommand(runtime, normalized, "score");
+}
+
+async function handleEvalCommand(runtime, normalized) {
+  await handleOptimizationSurfaceCommand(runtime, normalized, "eval");
+}
+
+async function handleOptimizationSurfaceCommand(runtime, normalized, surface) {
+  const capabilityHandler = runtime?.capabilities?.handleOptimizationCommand;
+  const legacyHandler = runtime?.optimizationManager?.handleCommand;
+  if (typeof capabilityHandler !== "function" && typeof legacyHandler !== "function") {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: "优化记忆管理器尚未初始化。请先重启桥接进程。",
+    });
+    return;
+  }
+  if (typeof capabilityHandler === "function") {
+    await capabilityHandler.call(runtime.capabilities, { surface, normalized, runtime });
+    return;
+  }
+  await legacyHandler.call(runtime.optimizationManager, { surface, normalized, runtime });
 }
 
 async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeText = "" } = {}) {
@@ -136,6 +247,11 @@ async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeTe
     : threads.slice(0, 3);
   const status = runtime.describeWorkspaceStatus(threadId);
   const codexParams = runtime.getCodexParamsForWorkspace(bindingKey, workspaceRoot);
+  const goal = runtime.sessionStore.getGoalForWorkspace(bindingKey, workspaceRoot);
+  const goalState = runtime.sessionStore.getGoalStateForWorkspace(bindingKey, workspaceRoot);
+  const memoryStatus = typeof runtime.resolveEvolvingMemoryStatus === "function"
+    ? await runtime.resolveEvolvingMemoryStatus({ bindingKey })
+    : null;
   const availableCatalog = runtime.sessionStore.getAvailableModelCatalog();
   const availableModels = Array.isArray(availableCatalog?.models) ? availableCatalog.models : [];
   const modelOptions = buildModelSelectOptions(availableModels);
@@ -146,6 +262,9 @@ async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeTe
     card: runtime.buildStatusPanelCard({
       workspaceRoot,
       codexParams,
+      goal,
+      goalState,
+      memoryStatus,
       modelOptions,
       effortOptions,
       threadId,
@@ -203,7 +322,277 @@ async function handleHelpCommand(runtime, normalized) {
   await runtime.sendInfoCardMessage({
     chatId: normalized.chatId,
     replyToMessageId: normalized.messageId,
-    text: runtime.buildHelpCardText(),
+    text: runtime.buildHelpCardText(runtime.config),
+  });
+}
+
+async function handleSkillCommand(runtime, normalized) {
+  await handleCloudAssetCommand(runtime, normalized, {
+    kind: "skill",
+    title: "技能",
+    root: runtime.config.skillRoot,
+    valueExtractor: extractSkillValue,
+  });
+}
+
+async function handleCloudAssetCommand(runtime, normalized, { kind, title, root, valueExtractor }) {
+  const workspaceContext = await resolveWorkspaceContext(runtime, normalized, {
+    replyToMessageId: normalized.messageId,
+    missingWorkspaceText: "当前项目还没有绑定可操作的工作区，请先用 `/codex bind /绝对路径` 绑定后再继续。",
+  });
+  if (!workspaceContext) {
+    return;
+  }
+
+  const { bindingKey, workspaceRoot } = workspaceContext;
+  const raw = String(valueExtractor(normalized.text) || "").trim();
+  const currentState = runtime.sessionStore.getSkillStateForWorkspace(bindingKey, workspaceRoot);
+  const assetRoot = String(root || "").trim();
+
+  if (!raw || raw.toLowerCase() === "list") {
+    const items = readAssetEntries(assetRoot);
+    runtime.sessionStore.setSkillStateForWorkspace(bindingKey, workspaceRoot, {
+      skillRoot: kind === "skill" ? assetRoot : currentState.skillRoot,
+      pluginRoot: kind === "plugin" ? assetRoot : currentState.pluginRoot,
+      skillItems: kind === "skill" ? items : currentState.skillItems,
+      pluginItems: kind === "plugin" ? items : currentState.pluginItems,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: formatAssetListText(title, assetRoot, items),
+    });
+    return;
+  }
+
+  const [action, ...rest] = raw.split(/\s+/);
+  const normalizedAction = String(action || "list").toLowerCase();
+  const targetName = normalizeAssetName(rest.join(" "));
+
+  if (normalizedAction === "create") {
+    if (!targetName) {
+      await runtime.sendInfoCardMessage({
+        chatId: normalized.chatId,
+        replyToMessageId: normalized.messageId,
+        text: `用法：\`/codex ${kind} create <name>\``,
+      });
+      return;
+    }
+    const result = createCloudAssetScaffold({ kind, root: assetRoot, name: targetName });
+    const items = readAssetEntries(assetRoot);
+    runtime.sessionStore.setSkillStateForWorkspace(bindingKey, workspaceRoot, {
+      skillRoot: kind === "skill" ? assetRoot : currentState.skillRoot,
+      pluginRoot: kind === "plugin" ? assetRoot : currentState.pluginRoot,
+      skillItems: kind === "skill" ? items : currentState.skillItems,
+      pluginItems: kind === "plugin" ? items : currentState.pluginItems,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: result.ok ? `${title}已创建：\`${result.path}\`` : result.errorText,
+    });
+    return;
+  }
+
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
+    replyToMessageId: normalized.messageId,
+    text: `不支持的${title}操作：${normalizedAction}`,
+  });
+}
+
+async function handlePluginCommand(runtime, normalized) {
+  const workspaceContext = await resolveWorkspaceContext(runtime, normalized, {
+    replyToMessageId: normalized.messageId,
+    missingWorkspaceText: "当前项目还未绑定。先发送 `/codex bind /绝对路径`。",
+  });
+  if (!workspaceContext) {
+    return;
+  }
+
+  const { bindingKey, workspaceRoot } = workspaceContext;
+  const currentState = runtime.sessionStore.getSkillStateForWorkspace(bindingKey, workspaceRoot);
+  const pluginRoot = String(runtime.config.pluginRoot || "").trim();
+  const marketplaceRoot = String(runtime.config.marketplaceRoot || "").trim();
+  const marketplaceFile = marketplaceRoot ? path.join(marketplaceRoot, "marketplace.json") : "";
+  const raw = String(extractPluginValue(normalized.text) || "").trim();
+
+  if (!raw || raw.toLowerCase() === "list") {
+    const items = listInstalledPlugins(pluginRoot);
+    const marketplaceItems = listMarketplacePlugins(marketplaceFile);
+    runtime.sessionStore.setSkillStateForWorkspace(bindingKey, workspaceRoot, {
+      skillRoot: currentState.skillRoot,
+      pluginRoot,
+      skillItems: currentState.skillItems,
+      pluginItems: items,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: formatPluginListText({ pluginRoot, marketplaceFile, items, marketplaceItems }),
+    });
+    return;
+  }
+
+  const segments = raw.split(/\s+/).filter(Boolean);
+  const action = String(segments[0] || "").toLowerCase();
+  const subject = segments.slice(1).join(" ");
+
+  if (action === "install" || action === "installgithub") {
+    const target = normalizePluginName(subject || (action === "installgithub" ? "github" : ""));
+    if (target !== "github") {
+      await runtime.sendInfoCardMessage({
+        chatId: normalized.chatId,
+        replyToMessageId: normalized.messageId,
+        text: "当前只内置了 GitHub 快速安装路径：`/codex plugin install github`。",
+      });
+      return;
+    }
+    const result = ensureGithubPluginInstall({ pluginRoot, marketplacePath: marketplaceFile, force: true });
+    const items = listInstalledPlugins(pluginRoot);
+    runtime.sessionStore.setSkillStateForWorkspace(bindingKey, workspaceRoot, {
+      skillRoot: currentState.skillRoot,
+      pluginRoot,
+      skillItems: currentState.skillItems,
+      pluginItems: items,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: result.ok
+        ? [
+          "GitHub 插件已安装/刷新。",
+          `- Plugin: \`${result.pluginPath}\``,
+          `- Manifest: \`${result.manifestPath}\``,
+          `- Marketplace: \`${result.marketplacePath}\``,
+          "",
+          "下一步执行 `/codex reload` 或重启 Codex app-server，让远端重新读取插件根目录。",
+        ].join("\n")
+        : result.errorText,
+    });
+    return;
+  }
+
+  if (action === "manifest") {
+    const target = normalizePluginName(subject);
+    if (!target) {
+      await runtime.sendInfoCardMessage({
+        chatId: normalized.chatId,
+        replyToMessageId: normalized.messageId,
+        text: "用法：`/codex plugin manifest <name>`",
+      });
+      return;
+    }
+    const pluginPath = path.join(pluginRoot, target);
+    const manifestResult = ensurePluginManifest({
+      pluginPath,
+      pluginName: target,
+      displayName: toDisplayName(target),
+      description: `${toDisplayName(target)} plugin for Codex`,
+      installSource: target === "github" ? "github" : "local",
+      force: true,
+    });
+    const manifest = readPluginManifest(pluginPath);
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: manifestResult.ok
+        ? [
+          `plugin manifest 已写入：\`${manifestResult.manifestPath}\``,
+          "",
+          `- name: ${manifest?.name || target}`,
+          `- version: ${manifest?.version || ""}`,
+          `- enabled: ${manifest?.enabled !== false}`,
+          `- install_source: ${manifest?.install_source || ""}`,
+          `- skills: ${manifest?.skills || ""}`,
+          `- tools: ${manifest?.tools || ""}`,
+          `- mcpServers: ${manifest?.mcpServers || ""}`,
+        ].join("\n")
+        : manifestResult.errorText,
+    });
+    return;
+  }
+
+  if (action === "marketplace") {
+    const target = normalizePluginName(subject);
+    if (!target) {
+      await runtime.sendInfoCardMessage({
+        chatId: normalized.chatId,
+        replyToMessageId: normalized.messageId,
+        text: "用法：`/codex plugin marketplace <name>`",
+      });
+      return;
+    }
+    const result = ensureMarketplaceEntry(marketplaceFile, target);
+    const install = describePluginInstall({
+      pluginPath: path.join(pluginRoot, target),
+      manifestPath: path.join(pluginRoot, target, ".codex-plugin", "plugin.json"),
+      marketplacePath: marketplaceFile,
+      pluginName: target,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: result.ok
+        ? [
+          `marketplace 已写入：\`${marketplaceFile}\``,
+          "",
+          `- plugin: ${install.pluginName}`,
+          `- installed: ${install.installed ? "yes" : "no"}`,
+          `- marketplace linked: ${install.marketplaceLinked ? "yes" : "no"}`,
+          `- source path: ${install.marketplaceEntry?.source?.path || `./plugins/${target}`}`,
+        ].join("\n")
+        : result.errorText,
+    });
+    return;
+  }
+
+  if (action === "create") {
+    const targetName = normalizePluginName(subject);
+    if (!targetName) {
+      await runtime.sendInfoCardMessage({
+        chatId: normalized.chatId,
+        replyToMessageId: normalized.messageId,
+        text: "用法：`/codex plugin create <name>`",
+      });
+      return;
+    }
+    const result = ensurePluginSkeleton({
+      pluginRoot,
+      pluginName: targetName,
+      displayName: toDisplayName(targetName),
+      description: `${toDisplayName(targetName)} plugin for Codex`,
+      installSource: "local",
+      force: false,
+    });
+    const marketplaceResult = ensureMarketplaceEntry(marketplaceFile, targetName);
+    const items = listInstalledPlugins(pluginRoot);
+    runtime.sessionStore.setSkillStateForWorkspace(bindingKey, workspaceRoot, {
+      skillRoot: currentState.skillRoot,
+      pluginRoot,
+      skillItems: currentState.skillItems,
+      pluginItems: items,
+    });
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: result.ok
+        ? [
+          `插件已创建：\`${result.pluginPath}\``,
+          `- manifest: \`${result.manifestPath}\``,
+          `- marketplace: \`${marketplaceResult.path || marketplaceFile}\``,
+          "",
+          "下一步执行 `/codex reload` 或重启 Codex app-server，让远端重新读取插件根目录。",
+        ].join("\n")
+        : result.errorText,
+    });
+    return;
+  }
+
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
+    replyToMessageId: normalized.messageId,
+    text: `不支持的插件操作：${action}`,
   });
 }
 
@@ -229,7 +618,7 @@ async function handleSendCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "用法: `/codex send <当前项目下的相对文件路径>`",
+      text: "用法：`/codex send <当前项目下的相对文件路径>`",
     });
     return;
   }
@@ -252,7 +641,7 @@ async function handleSendCommand(runtime, normalized) {
       await runtime.sendInfoCardMessage({
         chatId: normalized.chatId,
         replyToMessageId: normalized.messageId,
-        text: `文件不存在: ${resolvedTarget.displayPath}`,
+        text: `文件不存在：${resolvedTarget.displayPath}`,
       });
       return;
     }
@@ -263,7 +652,7 @@ async function handleSendCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: `只支持发送文件，不支持目录: ${resolvedTarget.displayPath}`,
+      text: `只支持发送文件，不支持目录：${resolvedTarget.displayPath}`,
     });
     return;
   }
@@ -272,7 +661,7 @@ async function handleSendCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: `文件为空，无法发送: ${resolvedTarget.displayPath}`,
+      text: `文件为空，无法发送：${resolvedTarget.displayPath}`,
     });
     return;
   }
@@ -286,7 +675,7 @@ async function handleSendCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: `文件过大，飞书当前只支持发送 ${uploadLimitLabel} 以内${attachmentKind === "image" ? "图片" : "文件"}: ${resolvedTarget.displayPath}`,
+      text: `文件过大，飞书当前只支持发送 ${uploadLimitLabel} 以内${attachmentKind === "image" ? "图片" : "文件"}：${resolvedTarget.displayPath}`,
     });
     return;
   }
@@ -326,9 +715,7 @@ async function handleModelCommand(runtime, normalized) {
   const rawModel = extractModelValue(normalized.text);
   if (!rawModel) {
     const current = runtime.getCodexParamsForWorkspace(bindingKey, workspaceRoot);
-    const availableModelsResult = await loadAvailableModels(runtime, {
-      forceRefresh: false,
-    });
+    const availableModelsResult = await loadAvailableModels(runtime, { forceRefresh: false });
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
@@ -339,22 +726,16 @@ async function handleModelCommand(runtime, normalized) {
 
   const modelUpdateDirective = parseUpdateDirective(rawModel);
   if (modelUpdateDirective) {
-    const availableModelsResult = await loadAvailableModels(runtime, {
-      forceRefresh: true,
-    });
+    const availableModelsResult = await loadAvailableModels(runtime, { forceRefresh: true });
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: runtime.buildModelListText(workspaceRoot, availableModelsResult, {
-        refreshed: true,
-      }),
+      text: runtime.buildModelListText(workspaceRoot, availableModelsResult, { refreshed: true }),
     });
     return;
   }
 
-  const availableModelsResult = await loadAvailableModelsForSetting(runtime, normalized, {
-    settingType: "model",
-  });
+  const availableModelsResult = await loadAvailableModelsForSetting(runtime, normalized, { settingType: "model" });
   if (!availableModelsResult) {
     return;
   }
@@ -391,9 +772,7 @@ async function handleEffortCommand(runtime, normalized) {
   const rawEffort = extractEffortValue(normalized.text);
   if (!rawEffort) {
     const current = runtime.getCodexParamsForWorkspace(bindingKey, workspaceRoot);
-    const availableModelsResult = await loadAvailableModels(runtime, {
-      forceRefresh: false,
-    });
+    const availableModelsResult = await loadAvailableModels(runtime, { forceRefresh: false });
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
@@ -402,9 +781,7 @@ async function handleEffortCommand(runtime, normalized) {
     return;
   }
 
-  const availableModelsResult = await loadAvailableModelsForSetting(runtime, normalized, {
-    settingType: "effort",
-  });
+  const availableModelsResult = await loadAvailableModelsForSetting(runtime, normalized, { settingType: "effort" });
   if (!availableModelsResult) {
     return;
   }
@@ -498,7 +875,7 @@ async function handleWorkspacesCommand(runtime, normalized, { replyToMessageId }
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: replyTarget,
-      text: "当前会话还没有已绑定项目。先发送 `/codex bind /绝对路径`。",
+      text: buildMissingWorkspaceBindingText(),
     });
     return;
   }
@@ -517,7 +894,7 @@ async function showThreadPicker(runtime, normalized, { replyToMessageId } = {}) 
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: replyTarget,
-      text: "当前会话还未绑定项目。先发送 `/codex bind /绝对路径`。",
+      text: buildMissingWorkspaceBindingText(),
     });
     return;
   }
@@ -536,11 +913,7 @@ async function showThreadPicker(runtime, normalized, { replyToMessageId } = {}) 
   await runtime.sendInteractiveCard({
     chatId: normalized.chatId,
     replyToMessageId: replyTarget,
-    card: runtime.buildThreadPickerCard({
-      workspaceRoot,
-      threads,
-      currentThreadId,
-    }),
+    card: runtime.buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }),
   });
 }
 
@@ -550,7 +923,7 @@ async function handleRemoveCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "用法: `/codex remove /绝对路径`",
+      text: "用法：`/codex remove /绝对路径`",
     });
     return;
   }
@@ -609,7 +982,6 @@ async function switchWorkspaceByPath(runtime, normalized, workspaceRoot, { reply
     normalized,
     autoSelectThread: true,
   });
-
   await handleWorkspacesCommand(runtime, normalized, {
     replyToMessageId: replyToMessageId || normalized.messageId,
   });
@@ -653,35 +1025,165 @@ async function removeWorkspaceByPath(runtime, normalized, workspaceRoot, { reply
   }
 
   runtime.sessionStore.removeWorkspace(bindingKey, targetWorkspaceRoot);
-  await handleWorkspacesCommand(runtime, normalized, {
+  const nextWorkspaceRoot = runtime.resolveWorkspaceRootForBinding(bindingKey);
+  if (nextWorkspaceRoot) {
+    await runtime.showStatusPanel(normalized, {
+      replyToMessageId: replyToMessageId || normalized.messageId,
+      noticeText: "已移除项目，并切换到仍绑定的项目。",
+    });
+    return;
+  }
+
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
     replyToMessageId: replyToMessageId || normalized.messageId,
+    text: buildWorkspaceRemovedText(targetWorkspaceRoot),
   });
 }
 
-module.exports = {
-  handleAccessCommand,
-  handleBindCommand,
-  handleEffortCommand,
-  handleHelpCommand,
-  handleMessageCommand,
-  handleModelCommand,
-  handleRemoveCommand,
-  handleSendCommand,
-  handleUnknownCommand,
-  handleWhereCommand,
-  handleWorkspacesCommand,
-  removeWorkspaceByPath,
-  resolveWorkspaceContext,
-  showStatusPanel,
-  showThreadPicker,
-  switchWorkspaceByPath,
-  validateDefaultCodexParamsConfig,
-};
+function readAssetEntries(root) {
+  if (!root) {
+    return [];
+  }
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .map((entry) => entry.name)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+function createCloudAssetScaffold({ kind, root, name }) {
+  if (!root) {
+    return { ok: false, errorText: "资产根目录未配置。" };
+  }
+  const basePath = path.join(root, name);
+  fs.mkdirSync(basePath, { recursive: true });
+  if (kind === "skill") {
+    fs.writeFileSync(path.join(basePath, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`);
+  }
+  if (kind === "plugin") {
+    fs.mkdirSync(path.join(basePath, ".codex-plugin"), { recursive: true });
+    const manifest = {
+      name,
+      version: "0.1.0",
+      description: `${name} plugin`,
+      license: "MIT",
+      interface: {
+        displayName: name,
+        shortDescription: `${name} plugin`,
+        longDescription: `${name} plugin`,
+        developerName: "Codex",
+        category: "Productivity",
+      },
+    };
+    fs.writeFileSync(path.join(basePath, ".codex-plugin", "plugin.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  return { ok: true, path: basePath };
+}
+
+function formatAssetListText(title, root, items) {
+  return [
+    `${title}根目录：\`${root || "未配置"}\``,
+    "",
+    items.length ? items.map((item) => `- ${item}`).join("\n") : "当前没有可展示的条目。",
+  ].join("\n");
+}
+
+function formatPluginListText({ pluginRoot, marketplaceFile, items, marketplaceItems }) {
+  return [
+    `插件目录：\`${pluginRoot || "未配置"}\``,
+    `Marketplace：\`${marketplaceFile || "未配置"}\``,
+    "",
+    "**磁盘已安装**",
+    items.length ? items.map((item) => `- ${item}`).join("\n") : "- 无",
+    "",
+    "**Marketplace 可见**",
+    marketplaceItems.length
+      ? marketplaceItems
+        .map((item) => `- ${item.name} (${item.installation || "AVAILABLE"} / ${item.authentication || "ON_INSTALL"})`)
+        .join("\n")
+      : "- 无",
+  ].join("\n");
+}
+
+function normalizeAssetName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function buildWorkspacePathStyleMismatchText(runtime, workspaceRoot) {
+  const instanceLabel = runtime.describeInstanceLabel();
+  const platformLabel = formatRuntimePlatformLabel(process.platform);
+  return [
+    `当前实例：${instanceLabel}`,
+    `运行系统：${platformLabel}`,
+    "",
+    `这个路径风格和当前运行系统不匹配：\`${workspaceRoot}\``,
+    "请在飞书 bot 实际运行的机器上绑定可访问的绝对路径。",
+  ].join("\n");
+}
+
+function buildMissingWorkspaceBindingText() {
+  return "当前会话还未绑定项目。先发送 `/codex bind /绝对路径`。";
+}
+
+function buildGoalCommandText(workspaceRoot, goal) {
+  return [
+    `当前项目：\`${workspaceRoot}\``,
+    `项目目标：${goal || "未设置"}`,
+    "",
+    "说明：设置后，后续像“继续”“下一步”“接着做”这类短消息会默认按当前目标持续推进。",
+    "",
+    "用法：",
+    "`/goal <目标内容>`",
+    "`/goal clear`",
+  ].join("\n");
+}
+
+function buildChatGoalCommandText(goal) {
+  return [
+    "当前会话：未绑定项目时的飞书聊天窗口",
+    `会话目标：${goal || "未设置"}`,
+    "",
+    "说明：设置后，后续像“继续”“下一步”“接着做”这类短消息会默认按当前目标持续推进。",
+    "",
+    "用法：",
+    "`/goal <目标内容>`",
+    "`/goal clear`",
+  ].join("\n");
+}
+
+function buildWorkspaceNotAccessibleText(runtime, workspaceRoot) {
+  const instanceLabel = runtime.describeInstanceLabel();
+  const platformLabel = formatRuntimePlatformLabel(process.platform);
+  return [
+    `当前实例：${instanceLabel}`,
+    `运行系统：${platformLabel}`,
+    "",
+    `当前执行层无法访问这个路径：\`${workspaceRoot}\``,
+    "请确认路径存在于飞书 bot 运行的机器上，并且进程有读取权限。",
+  ].join("\n");
+}
+
+function buildWorkspaceRemovedText(workspaceRoot) {
+  return [
+    `已移除项目：\`${workspaceRoot}\``,
+    "",
+    buildMissingWorkspaceBindingText(),
+  ].join("\n");
+}
 
 function resolveWorkspaceSendTarget(workspaceRoot, requestedPath) {
   const normalizedInput = normalizeWorkspacePath(requestedPath);
   if (!normalizedInput) {
-    return { errorText: "用法: `/codex send <当前项目下的相对文件路径>`" };
+    return { errorText: "用法：`/codex send <当前项目下的相对文件路径>`" };
   }
   if (isAbsoluteWorkspacePath(normalizedInput)) {
     return { errorText: "只支持当前项目下的相对路径，不支持绝对路径。" };
@@ -701,10 +1203,7 @@ function resolveWorkspaceSendTarget(workspaceRoot, requestedPath) {
 
 function parseUpdateDirective(value) {
   const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-  if (normalized === "update") {
-    return { forceRefresh: true };
-  }
-  return null;
+  return normalized === "update" ? { forceRefresh: true } : null;
 }
 
 function applyDefaultCodexParamsOnBind(runtime, bindingKey, workspaceRoot) {
@@ -716,18 +1215,11 @@ function applyDefaultCodexParamsOnBind(runtime, bindingKey, workspaceRoot) {
   const availableCatalog = runtime.sessionStore.getAvailableModelCatalog();
   const availableModels = Array.isArray(availableCatalog?.models) ? availableCatalog.models : [];
   const validatedDefaults = validateDefaultCodexParamsConfig(runtime, availableModels);
-  const defaultModel = validatedDefaults.model;
-  const defaultEffort = validatedDefaults.effort;
-  const defaultAccessMode = validatedDefaults.accessMode;
-  if (!defaultModel && !defaultEffort && !defaultAccessMode) {
+  if (!validatedDefaults.model && !validatedDefaults.effort && !validatedDefaults.accessMode) {
     return;
   }
 
-  runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
-    model: defaultModel,
-    effort: defaultEffort,
-    accessMode: defaultAccessMode,
-  });
+  runtime.sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, validatedDefaults);
 }
 
 function validateDefaultCodexParamsConfig(runtime, modelsInput) {
@@ -760,7 +1252,7 @@ function validateDefaultCodexParamsConfig(runtime, modelsInput) {
 async function resolveCodexSettingWorkspaceContext(runtime, normalized) {
   return resolveWorkspaceContext(runtime, normalized, {
     replyToMessageId: normalized.messageId,
-    missingWorkspaceText: "当前会话还未绑定项目。先发送 `/codex bind /绝对路径`。",
+    missingWorkspaceText: buildMissingWorkspaceBindingText(),
   });
 }
 
@@ -777,9 +1269,7 @@ function normalizeAccessMode(value) {
 }
 
 async function loadAvailableModelsForSetting(runtime, normalized, { settingType }) {
-  const availableModelsResult = await loadAvailableModels(runtime, {
-    forceRefresh: false,
-  });
+  const availableModelsResult = await loadAvailableModels(runtime, { forceRefresh: false });
   if (!availableModelsResult.error) {
     return availableModelsResult;
   }
@@ -909,10 +1399,7 @@ function buildEffortSelectOptions(models, currentModel) {
       continue;
     }
     seen.add(key);
-    options.push({
-      label: normalized,
-      value: normalized,
-    });
+    options.push({ label: normalized, value: normalized });
   }
   return options.slice(0, 20);
 }
@@ -930,3 +1417,29 @@ function listModelEfforts(modelEntry, { withDefaultFallback = false } = {}) {
   const defaultEffort = normalizeText(modelEntry?.defaultReasoningEffort);
   return defaultEffort ? [defaultEffort] : [];
 }
+
+module.exports = {
+  handleAccessCommand,
+  handleBindCommand,
+  handleDoctorCommand,
+  handleEffortCommand,
+  handleEvalCommand,
+  handleGoalCommand,
+  handleHelpCommand,
+  handleMessageCommand,
+  handleModelCommand,
+  handlePluginCommand,
+  handleRemoveCommand,
+  handleScoreCommand,
+  handleSendCommand,
+  handleSkillCommand,
+  handleUnknownCommand,
+  handleWhereCommand,
+  handleWorkspacesCommand,
+  removeWorkspaceByPath,
+  resolveWorkspaceContext,
+  showStatusPanel,
+  showThreadPicker,
+  switchWorkspaceByPath,
+  validateDefaultCodexParamsConfig,
+};

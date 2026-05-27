@@ -7,16 +7,19 @@ const {
   splitAssistantReplyForDisplay,
 } = require("../../shared/assistant-markdown");
 const { formatFailureText } = require("../../shared/error-text");
+const { createLogger } = require("../../shared/logger");
 const {
   buildApprovalCard,
   buildApprovalResolvedCard,
   buildAssistantReplyCard,
   buildCardResponse,
   buildInfoCard,
+  buildPluginRouteCard,
   mergeReplyText,
 } = require("./builders");
 
 const CARDKIT_STREAMING_ELEMENT_ID = "streaming_content";
+const logger = createLogger("card-service");
 
 async function sendInfoCardMessage(runtime, { chatId, text, replyToMessageId = "", replyInThread = false, kind = "info" }) {
   if (!chatId || !text) {
@@ -28,6 +31,19 @@ async function sendInfoCardMessage(runtime, { chatId, text, replyToMessageId = "
     replyToMessageId,
     replyInThread,
     card: buildInfoCard(text, { kind }),
+  });
+}
+
+async function sendPluginRouteCardMessage(runtime, { chatId, route, replyToMessageId = "", replyInThread = false }) {
+  if (!chatId || !route) {
+    return null;
+  }
+
+  return sendInteractiveCard(runtime, {
+    chatId,
+    replyToMessageId,
+    replyInThread,
+    card: buildPluginRouteCard(route),
   });
 }
 
@@ -548,26 +564,7 @@ function buildCardKitFinalCard(runtime, entry) {
 }
 
 function buildCardKitStatusPanels(runtime, runKey, entry) {
-  const toolTrace = runtime.toolTraceByRunKey.get(runKey);
-  const elapsed = formatReplyElapsed(entry.startedAt);
-  const tokenUsage = runtime.latestTokenUsageByThreadId.get(entry.threadId);
-  const display = buildAssistantDisplayContent(entry);
-  return [
-    buildCardKitCollapsiblePanel({
-      title: buildToolPanelTitle(runtime.toolItemIdsByRunKey.get(runKey), entry.state),
-      content: formatToolTraceText(toolTrace, entry.state),
-    }),
-    buildCardKitCollapsiblePanel({
-      title: entry.state === "streaming" ? "💭 正在想" : "💭 思考完成",
-      content: formatThinkingText({
-        state: entry.state,
-        elapsed,
-        toolTrace,
-        tokenUsage,
-        assistantNotes: display.notes,
-      }),
-    }),
-  ];
+  return [];
 }
 
 function buildCardKitCollapsiblePanel({ title, content }) {
@@ -615,16 +612,8 @@ function buildCardKitStreamingContent(entry) {
 }
 
 function buildCardKitStatusSignature(runtime, runKey, entry) {
-  const toolItems = runtime.toolItemIdsByRunKey.get(runKey);
-  const toolTrace = runtime.toolTraceByRunKey.get(runKey);
-  const tokenUsage = runtime.latestTokenUsageByThreadId.get(entry.threadId);
-  const display = buildAssistantDisplayContent(entry);
   return JSON.stringify({
     state: entry.state,
-    toolCount: toolItems instanceof Set ? toolItems.size : 0,
-    toolTrace: Array.isArray(toolTrace) ? toolTrace.filter(Boolean) : [],
-    reasoning: Number(tokenUsage?.last?.reasoningOutputTokens || 0),
-    notes: display.notes,
   });
 }
 
@@ -732,29 +721,40 @@ async function flushLegacyReplyCard(runtime, runKey, entry) {
     state: entry.state,
     elapsed: formatReplyElapsed(entry.startedAt),
     model: runtime.config.defaultCodexModel || "Codex",
-    toolText: formatToolTraceText(runtime.toolTraceByRunKey.get(runKey), entry.state),
-    thinkingText: formatThinkingText({
-      state: entry.state,
-      elapsed: formatReplyElapsed(entry.startedAt),
-      toolTrace: runtime.toolTraceByRunKey.get(runKey),
-      tokenUsage: runtime.latestTokenUsageByThreadId.get(entry.threadId),
-      assistantNotes: buildAssistantDisplayContent(entry).notes,
-    }),
     usageText: formatUsageText(runtime.latestTokenUsageByThreadId.get(entry.threadId)),
     contextText: formatContextText(runtime.latestTokenUsageByThreadId.get(entry.threadId)),
     toolCountText: formatToolCountText(runtime.toolItemIdsByRunKey.get(runKey)),
   });
 
   if (!entry.messageId) {
-    const response = await sendInteractiveCard(runtime, {
-      chatId: entry.chatId,
-      card,
-      replyToMessageId: entry.replyToMessageId,
-    });
-    entry.messageId = codexMessageUtils.extractCreatedMessageId(response);
+    try {
+      const response = await sendInteractiveCard(runtime, {
+        chatId: entry.chatId,
+        card,
+        replyToMessageId: entry.replyToMessageId,
+      });
+      entry.messageId = codexMessageUtils.extractCreatedMessageId(response);
+    } catch (error) {
+      logger.warn("interactive reply card failed; falling back to text", {
+        threadId: entry.threadId,
+        error,
+      });
+    }
+
     if (!entry.messageId) {
+      if (!runtime.config.feishuPlainTextFallback) {
+        return;
+      }
+      await runtime.requireFeishuAdapter().sendTextByChatId({
+        chatId: entry.chatId,
+        text: resolveAssistantReplyContent(entry),
+        replyToMessageId: entry.replyToMessageId,
+        replyInThread: true,
+      });
+      runtime.disposeReplyRunState(runKey, entry.threadId);
       return;
     }
+
     runtime.setReplyCardEntry(runKey, entry);
     runtime.clearPendingReactionForThread(entry.threadId).catch((error) => {
       console.error(`[codex-im] failed to clear pending reaction after first reply card: ${error.message}`);
@@ -765,10 +765,28 @@ async function flushLegacyReplyCard(runtime, runKey, entry) {
     return;
   }
 
-  await patchInteractiveCard(runtime, {
-    messageId: entry.messageId,
-    card,
-  });
+  try {
+    await patchInteractiveCard(runtime, {
+      messageId: entry.messageId,
+      card,
+    });
+  } catch (error) {
+    logger.warn("interactive reply patch failed; falling back to text", {
+      threadId: entry.threadId,
+      messageId: entry.messageId,
+      error,
+    });
+    if (runtime.config.feishuPlainTextFallback) {
+      await runtime.requireFeishuAdapter().sendTextByChatId({
+        chatId: entry.chatId,
+        text: resolveAssistantReplyContent(entry),
+        replyToMessageId: entry.replyToMessageId,
+        replyInThread: true,
+      });
+      runtime.disposeReplyRunState(runKey, entry.threadId);
+    }
+    return;
+  }
 
   if (entry.state === "completed" || entry.state === "failed") {
     runtime.disposeReplyRunState(runKey, entry.threadId);
@@ -865,6 +883,7 @@ function disposeReplyRunState(runtime, runKey, threadId) {
     runtime.toolItemIdsByRunKey.delete(runKey);
     runtime.toolTraceByRunKey.delete(runKey);
     runtime.assistantDeltaSeenByRunKey.delete(runKey);
+    runtime.hiddenGoalDirectiveStateByRunKey?.delete(runKey);
   }
   if (threadId && runtime.currentRunKeyByThreadId.get(threadId) === runKey) {
     runtime.currentRunKeyByThreadId.delete(threadId);
@@ -884,6 +903,82 @@ async function flushAssistantReplyCardNow(runtime, { threadId, turnId = "" } = {
   }
   clearReplyFlushTimer(runtime, runKey);
   await enqueueReplyCardFlush(runtime, runKey);
+}
+
+async function flushAllAssistantReplyCards(runtime, { interruptionText = "" } = {}) {
+  const notice = typeof interruptionText === "string" ? interruptionText.trim() : "";
+  const coveredThreadIds = new Set();
+  const runKeys = Array.from(runtime.replyCardByRunKey.keys());
+
+  for (const runKey of runKeys) {
+    const entry = runtime.replyCardByRunKey.get(runKey);
+    if (!entry) {
+      continue;
+    }
+    if (entry.threadId) {
+      coveredThreadIds.add(entry.threadId);
+    }
+    if (!isTerminalReplyState(entry.state)) {
+      applyInterruptionNoticeToEntry(entry, notice);
+      entry.state = "failed";
+      runtime.setReplyCardEntry(runKey, entry);
+    }
+    try {
+      clearReplyFlushTimer(runtime, runKey);
+      await enqueueReplyCardFlush(runtime, runKey);
+    } catch (error) {
+      logger.error("failed to flush reply card during shutdown", {
+        threadId: entry.threadId,
+        runKey,
+        error,
+      });
+    }
+  }
+
+  const threadIds = new Set([
+    ...runtime.activeTurnIdByThreadId.keys(),
+    ...runtime.pendingChatContextByThreadId.keys(),
+  ]);
+  for (const threadId of threadIds) {
+    if (!threadId || coveredThreadIds.has(threadId)) {
+      continue;
+    }
+    const context = runtime.pendingChatContextByThreadId.get(threadId);
+    if (!context?.chatId) {
+      continue;
+    }
+    try {
+      await sendInfoCardMessage(runtime, {
+        chatId: context.chatId,
+        replyToMessageId: context.messageId || "",
+        text: notice || "桥正在重启，这一轮被中断了。恢复后你直接发“继续”就行。",
+        kind: "warning",
+      });
+    } catch (error) {
+      logger.error("failed to send shutdown interruption notice", {
+        threadId,
+        error,
+      });
+    }
+  }
+}
+
+function isTerminalReplyState(state) {
+  const normalized = String(state || "").trim().toLowerCase();
+  return normalized === "completed" || normalized === "failed";
+}
+
+function applyInterruptionNoticeToEntry(entry, notice) {
+  if (!entry || !notice) {
+    return;
+  }
+  const current = resolveAssistantReplyContent(entry).trim();
+  if (current.includes(notice)) {
+    return;
+  }
+  const nextText = current ? `${current}\n\n${notice}` : notice;
+  entry.answerText = nextText;
+  entry.text = nextText;
 }
 
 function formatReplyElapsed(startedAt) {
@@ -1006,6 +1101,7 @@ module.exports = {
   clearPendingReactionForBinding,
   clearPendingReactionForThread,
   disposeReplyRunState,
+  flushAllAssistantReplyCards,
   flushAssistantReplyCardNow,
   handleCardAction,
   movePendingReactionToThread,
@@ -1015,6 +1111,7 @@ module.exports = {
   sendCardActionFeedback,
   sendCardActionFeedbackByContext,
   sendInfoCardMessage,
+  sendPluginRouteCardMessage,
   sendInteractiveApprovalCard,
   sendInteractiveCard,
   updateInteractiveCard,

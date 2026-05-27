@@ -25,7 +25,9 @@
   "files": [
     "bin",
     "docs",
-    "src",
+    "src/**/*.js",
+    "!src/**/*.bak*",
+    "!src/infra/memory/**",
     "CHANGELOG.md",
     "README.md",
     ".env.example"
@@ -41,21 +43,39 @@
   },
   "scripts": {
     "feishu-bot": "node ./bin/codex-im.js",
+    "morning-briefing:run": "node ./scripts/run-morning-briefing.js",
+    "ssh:probe": "node ./scripts/ssh-banner-probe.js",
     "check": "node ./scripts/check-syntax.js",
-    "check:mem0": "node ./scripts/check-mem0.js",
+    "test:morning-prompt": "node ./scripts/test-morning-prompt.js",
+    "test:morning-schedule": "node ./scripts/test-morning-schedule.js",
+    "test:attachment-receipt": "node ./scripts/test-attachment-receipt.js",
+    "test:goal-doctor": "node ./scripts/test-goal-and-doctor.js",
+    "test:plugin-registry": "node ./scripts/test-plugin-registry.js",
+    "test:optimization-memory": "node ./scripts/test-optimization-memory.js",
     "test:markdown": "node ./scripts/test-assistant-markdown.js",
     "test:card-content": "node ./scripts/test-card-reply-content.js",
     "test:media": "node ./scripts/test-media-fixtures.js",
     "test:directives": "node ./scripts/test-outbound-directives.js",
+    "score:system": "node ./scripts/run-optimization-scores.js system",
+    "score:bridge": "node ./scripts/run-optimization-scores.js bridge",
+    "score:bot": "node ./scripts/run-optimization-scores.js bot",
+    "score": "node ./scripts/run-optimization-scores.js all",
+    "eval:appointment-parser": "node ./scripts/run-promptfoo.js eval -c ./evals/appointment-parser/promptfooconfig.baseline.yaml",
+    "eval:appointment-parser:growth": "node ./scripts/run-promptfoo.js eval -c ./evals/appointment-parser/promptfooconfig.growth.yaml",
     "privacy:scan": "node ./scripts/privacy-scan.js",
     "pack:dry-run": "npm pack --dry-run",
-    "check:release": "npm run check && npm run test:markdown && npm run test:card-content && npm run test:media && npm run test:directives && npm run privacy:scan && npm audit --omit=dev && npm run pack:dry-run"
+    "check:release": "npm run check && npm run test:goal-doctor && npm run test:appointment && npm run test:plugin-routing && npm run test:optimization-memory && npm run test:markdown && npm run test:card-content && npm run test:media && npm run test:directives && npm run privacy:scan && npm audit --omit=dev --registry=https://registry.npmjs.org/ && npm run pack:dry-run",
+    "test:appointment": "node ./scripts/test-appointment-service.js",
+    "test:plugin-routing": "node ./scripts/test-plugin-routing-service.js"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.62.0",
     "axios": "^1.15.2",
     "dotenv": "^16.4.7",
-    "ws": "^8.19.0"
+    "ws": "^8.20.1"
+  },
+  "devDependencies": {
+    "promptfoo": "0.118.0"
   },
   "overrides": {
     "axios": "^1.15.2"

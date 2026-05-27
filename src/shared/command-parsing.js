@@ -30,6 +30,47 @@ function extractAccessValue(text) {
   return extractCommandArgument(text, "/codex access ");
 }
 
+function extractSkillValue(text) {
+  return extractCommandArgument(text, "/codex skill ");
+}
+
+function extractPluginValue(text) {
+  return extractCommandArgument(text, "/codex plugin ") || extractCommandArgument(text, "/codexplugin");
+}
+
+function extractPluginInstallValue(text) {
+  return extractCommandArgument(text, "/codex plugin install ") || extractCommandArgument(text, "/codexplugininstall");
+}
+
+function extractPluginManifestValue(text) {
+  return extractCommandArgument(text, "/codex plugin manifest ") || extractCommandArgument(text, "/codexpluginmanifest");
+}
+
+function extractPluginMarketplaceValue(text) {
+  return extractCommandArgument(text, "/codex plugin marketplace ") || extractCommandArgument(text, "/codexpluginmarketplace");
+}
+
+function extractScoreValue(text) {
+  return extractCommandArgument(text, "/codex score ");
+}
+
+function extractEvalValue(text) {
+  return extractCommandArgument(text, "/codex eval ");
+}
+
+function extractGoalValue(text) {
+  return extractCommandArgument(text, "/goal ");
+}
+
+function extractAppointmentValue(text) {
+  const trimmed = String(text || "").trim();
+  if (trimmed === "/预约" || trimmed.toLowerCase() === "/appoint") {
+    return "";
+  }
+  return extractCommandArgument(text, "/预约 ")
+    || extractCommandArgument(text, "/appoint ");
+}
+
 function extractCommandArgument(text, prefix) {
   const trimmed = String(text || "").trim();
   const normalizedPrefix = String(prefix || "").toLowerCase();
@@ -41,11 +82,20 @@ function extractCommandArgument(text, prefix) {
 
 module.exports = {
   extractAccessValue,
+  extractAppointmentValue,
   extractBindPath,
   extractEffortValue,
+  extractGoalValue,
   extractModelValue,
+  extractPluginValue,
+  extractPluginInstallValue,
+  extractPluginManifestValue,
+  extractPluginMarketplaceValue,
   extractProfileValue,
+  extractScoreValue,
   extractRemoveWorkspacePath,
   extractSendPath,
+  extractSkillValue,
   extractSwitchThreadId,
+  extractEvalValue,
 };

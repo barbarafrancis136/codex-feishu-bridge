@@ -111,6 +111,16 @@ class FeishuClientAdapter {
     });
   }
 
+  async sendTextMessage({ chatId, text, replyToMessageId = "", replyInThread = false }) {
+    return this.sendResourceMessage({
+      chatId,
+      replyToMessageId,
+      replyInThread,
+      msgType: "text",
+      content: JSON.stringify({ text: String(text || "") }),
+    });
+  }
+
   async patchInteractiveCard({ messageId, card }) {
     const patchMessage = resolvePatchMessageMethod(this.client);
     return callWithRetry(() => patchMessage.call(this.client.im?.v1?.message || this.client.im?.message || this.client, {
@@ -168,6 +178,15 @@ class FeishuClientAdapter {
         msg_type: "interactive",
         content,
       },
+    });
+  }
+
+  async sendTextByChatId({ chatId, text, replyToMessageId = "", replyInThread = false }) {
+    return this.sendTextMessage({
+      chatId,
+      text,
+      replyToMessageId,
+      replyInThread,
     });
   }
 
@@ -253,6 +272,60 @@ class FeishuClientAdapter {
     );
   }
 
+  async getMessage({ messageId, userIdType = "open_id" } = {}) {
+    const normalizedMessageId = normalizeMessageId(messageId);
+    if (!normalizedMessageId) {
+      throw new Error("Feishu message.get requires messageId");
+    }
+    const getMessage = resolveGetMessageMethod(this.client);
+    const response = await callWithRetry(() => getMessage.call(
+      this.client.im?.v1?.message || this.client.im?.message || this.client,
+      {
+        params: {
+          user_id_type: normalizeIdentifier(userIdType) || "open_id",
+        },
+        path: {
+          message_id: normalizedMessageId,
+        },
+      }
+    ), { operation: "message.get" });
+    assertFeishuBusinessOk(response, "message.get");
+    return Array.isArray(response?.data?.items) ? response.data.items : [];
+  }
+
+  async listMessages({
+    containerIdType,
+    containerId,
+    sortType = "ByCreateTimeDesc",
+    pageSize = 50,
+    pageToken = "",
+  } = {}) {
+    const normalizedContainerIdType = normalizeIdentifier(containerIdType);
+    const normalizedContainerId = normalizeIdentifier(containerId);
+    if (!normalizedContainerIdType || !normalizedContainerId) {
+      throw new Error("Feishu message.list requires containerIdType and containerId");
+    }
+    const listMessages = resolveListMessagesMethod(this.client);
+    const response = await callWithRetry(() => listMessages.call(
+      this.client.im?.v1?.message || this.client.im?.message || this.client,
+      {
+        params: {
+          container_id_type: normalizedContainerIdType,
+          container_id: normalizedContainerId,
+          sort_type: sortType,
+          page_size: normalizePageSize(pageSize),
+          ...(normalizeIdentifier(pageToken) ? { page_token: normalizeIdentifier(pageToken) } : {}),
+        },
+      }
+    ), { operation: "message.list" });
+    assertFeishuBusinessOk(response, "message.list");
+    return {
+      items: Array.isArray(response?.data?.items) ? response.data.items : [],
+      hasMore: response?.data?.has_more === true,
+      pageToken: normalizeIdentifier(response?.data?.page_token),
+    };
+  }
+
   async uploadFile({ fileName, fileBuffer, fileType = "stream", duration = null }) {
     const createFile = resolveCreateFileMethod(this.client);
     const data = {
@@ -336,6 +409,22 @@ function resolvePatchMessageMethod(client) {
   const fn = client?.im?.v1?.message?.patch || client?.im?.message?.patch;
   if (typeof fn !== "function") {
     throw new Error("Unsupported Feishu SDK shape: missing message.patch");
+  }
+  return fn;
+}
+
+function resolveGetMessageMethod(client) {
+  const fn = client?.im?.v1?.message?.get || client?.im?.message?.get;
+  if (typeof fn !== "function") {
+    throw new Error("Unsupported Feishu SDK shape: missing message.get");
+  }
+  return fn;
+}
+
+function resolveListMessagesMethod(client) {
+  const fn = client?.im?.v1?.message?.list || client?.im?.message?.list;
+  if (typeof fn !== "function") {
+    throw new Error("Unsupported Feishu SDK shape: missing message.list");
   }
   return fn;
 }
@@ -465,6 +554,14 @@ function normalizeFileName(fileName) {
 function normalizeFeishuFileType(fileType) {
   const normalized = typeof fileType === "string" && fileType.trim() ? fileType.trim() : "stream";
   return normalized.replace(/[^a-zA-Z0-9_-]/g, "") || "stream";
+}
+
+function normalizePageSize(value) {
+  const pageSize = Number(value || 0);
+  if (!Number.isFinite(pageSize) || pageSize <= 0) {
+    return 50;
+  }
+  return Math.max(1, Math.min(200, Math.floor(pageSize)));
 }
 
 async function callWithRetry(fn, { operation = "feishu.request" } = {}) {

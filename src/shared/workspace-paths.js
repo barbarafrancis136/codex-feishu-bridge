@@ -3,6 +3,7 @@ const path = require("path");
 const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:\//;
 const WINDOWS_DRIVE_ROOT_RE = /^[A-Za-z]:\/$/;
 const WINDOWS_UNC_PREFIX_RE = /^\/\/\?\//;
+const WINDOWS_UNC_PATH_RE = /^\/\/[^/]+\/[^/]+/;
 
 function normalizeWorkspacePath(value) {
   const normalized = String(value || "").trim();
@@ -107,7 +108,46 @@ function extractPathFromFileUri(value) {
 }
 
 function isWindowsStylePath(value) {
-  return WINDOWS_DRIVE_PATH_RE.test(String(value || ""));
+  const normalized = String(value || "");
+  return WINDOWS_DRIVE_PATH_RE.test(normalized) || WINDOWS_UNC_PATH_RE.test(normalized);
+}
+
+function detectWorkspacePathStyle(value) {
+  const normalized = normalizeWorkspacePath(value);
+  if (!normalized) {
+    return "";
+  }
+  if (isWindowsStylePath(normalized)) {
+    return "windows";
+  }
+  if (normalized.startsWith("/")) {
+    return "posix";
+  }
+  return "";
+}
+
+function isPathStyleCompatibleWithRuntime(workspaceRoot, platform = process.platform) {
+  const style = detectWorkspacePathStyle(workspaceRoot);
+  if (!style) {
+    return false;
+  }
+  if (platform === "win32") {
+    return style === "windows";
+  }
+  return style === "posix";
+}
+
+function formatRuntimePlatformLabel(platform = process.platform) {
+  if (platform === "win32") {
+    return "Windows";
+  }
+  if (platform === "darwin") {
+    return "macOS";
+  }
+  if (platform === "linux") {
+    return "Linux";
+  }
+  return platform || "unknown";
 }
 
 function workspacePathStartsWith(candidatePath, workspaceRoot) {
@@ -116,7 +156,10 @@ function workspacePathStartsWith(candidatePath, workspaceRoot) {
 
 module.exports = {
   filterThreadsByWorkspaceRoot,
+  formatRuntimePlatformLabel,
+  detectWorkspacePathStyle,
   isAbsoluteWorkspacePath,
+  isPathStyleCompatibleWithRuntime,
   isWorkspaceAllowed,
   normalizeWorkspacePath,
   pathMatchesWorkspaceRoot,

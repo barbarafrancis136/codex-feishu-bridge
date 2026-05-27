@@ -141,7 +141,7 @@ function buildApprovalCommandPreviewElements(commandPreview) {
   ];
 }
 
-function buildAssistantReplyCard({ text, state, incomingText = "", elapsed = "", model = "", toolText = "", thinkingText = "", usageText = "", contextText = "", toolCountText = "" }) {
+function buildAssistantReplyCard({ text, state, incomingText = "", elapsed = "", model = "", usageText = "", contextText = "", toolCountText = "" }) {
   const normalizedState = state || "streaming";
   const content = typeof text === "string" && text.trim()
     ? text.trim()
@@ -151,20 +151,6 @@ function buildAssistantReplyCard({ text, state, incomingText = "", elapsed = "",
         ? "我已经处理好了。"
         : "我正在整理正式回复。";
   const intro = buildAssistantReplyIntro(incomingText);
-  const resolvedToolText = typeof toolText === "string" && toolText.trim()
-    ? toolText.trim()
-    : normalizedState === "streaming"
-      ? "这条消息已经被我接住了。"
-      : normalizedState === "failed"
-        ? "这次处理在运行阶段出了问题。"
-        : "这次回复已经顺利走完。";
-  const resolvedThinkingText = typeof thinkingText === "string" && thinkingText.trim()
-    ? thinkingText.trim()
-    : normalizedState === "streaming"
-      ? "我在整理怎么更稳地回你。"
-      : normalizedState === "failed"
-        ? "我这次没把它收稳，所以先停在这里。"
-        : "我已经把这次回复收好了。";
   const footer = buildAssistantReplyFooter({
     status: normalizedState === "failed" ? "未完成" : normalizedState === "completed" ? "已完成" : "正在回复",
     elapsed,
@@ -193,58 +179,6 @@ function buildAssistantReplyCard({ text, state, incomingText = "", elapsed = "",
           tag: "markdown",
           content: intro,
           text_size: "notation",
-        },
-        {
-          tag: "collapsible_panel",
-          expanded: false,
-          header: {
-            title: {
-              tag: "plain_text",
-              content: "🔧 工具执行",
-            },
-            icon: {
-              tag: "standard_icon",
-              token: "down-small-ccm_outlined",
-              size: "16px 16px",
-            },
-            icon_position: "follow_text",
-            icon_expanded_angle: -180,
-          },
-          border: { color: "grey", corner_radius: "5px" },
-          padding: "8px 8px 8px 8px",
-          elements: [
-            {
-              tag: "markdown",
-              content: resolvedToolText,
-              text_size: "notation",
-            },
-          ],
-        },
-        {
-          tag: "collapsible_panel",
-          expanded: false,
-          header: {
-            title: {
-              tag: "plain_text",
-              content: normalizedState === "streaming" ? "💭 正在想" : "💭 思考完成",
-            },
-            icon: {
-              tag: "standard_icon",
-              token: "down-small-ccm_outlined",
-              size: "16px 16px",
-            },
-            icon_position: "follow_text",
-            icon_expanded_angle: -180,
-          },
-          border: { color: "grey", corner_radius: "5px" },
-          padding: "8px 8px 8px 8px",
-          elements: [
-            {
-              tag: "markdown",
-              content: resolvedThinkingText,
-              text_size: "notation",
-            },
-          ],
         },
         {
           tag: "div",
@@ -316,9 +250,129 @@ function buildInfoCard(text, { kind = "info" } = {}) {
   };
 }
 
+function buildPluginRouteCard(route) {
+  const normalizedRoute = route && typeof route === "object" ? route : {};
+  const isAmbiguous = normalizedRoute.kind === "ambiguous";
+  const title = isAmbiguous
+    ? "插件分流建议"
+    : `${normalizeText(normalizedRoute.displayName) || "插件"} 建议`;
+  const summary = isAmbiguous
+    ? "我识别到这条消息像是在调用插件能力，但当前方向还不够单一。"
+    : `这条消息更适合先走 ${escapeCardMarkdown(normalizeText(normalizedRoute.displayName) || "该插件")} 的 ${escapeCardMarkdown(normalizeText(normalizedRoute.categoryLabel) || "相关能力")}。`;
+  const elements = [
+    {
+      tag: "markdown",
+      content: `**${title}**`,
+      text_size: "normal",
+    },
+    {
+      tag: "markdown",
+      content: `**结论**\n${summary}`,
+      text_size: "normal",
+    },
+  ];
+
+  if (isAmbiguous) {
+    const candidates = Array.isArray(normalizedRoute.candidates) ? normalizedRoute.candidates : [];
+    if (candidates.length) {
+      elements.push({
+        tag: "markdown",
+        content: [
+          "**候选方向**",
+          ...candidates.map((item) => {
+            const name = escapeCardMarkdown(normalizeText(item.displayName) || "未命名插件");
+            const category = escapeCardMarkdown(normalizeText(item.categoryLabel) || "相关能力");
+            return `- ${name}：${category}`;
+          }),
+        ].join("\n"),
+        text_size: "normal",
+      });
+    }
+
+    const prompts = candidates
+      .map((item) => normalizeText(item.prompt))
+      .filter(Boolean);
+    if (prompts.length) {
+      elements.push({
+        tag: "markdown",
+        content: [
+          "**建议你下一步这样说**",
+          ...prompts.map((item) => `- ${escapeCardMarkdown(item)}`),
+        ].join("\n"),
+        text_size: "normal",
+      });
+    }
+  } else {
+    const reasons = Array.isArray(normalizedRoute.reasons) ? normalizedRoute.reasons : [];
+    if (reasons.length) {
+      elements.push({
+        tag: "markdown",
+        content: [
+          "**关键发现**",
+          ...reasons.map((item) => `- ${escapeCardMarkdown(item)}`),
+        ].join("\n"),
+        text_size: "normal",
+      });
+    }
+
+    const prompts = Array.isArray(normalizedRoute.prompts) ? normalizedRoute.prompts : [];
+    if (prompts.length) {
+      elements.push({
+        tag: "markdown",
+        content: [
+          "**建议你下一步这样说**",
+          ...prompts.map((item) => `- ${escapeCardMarkdown(item)}`),
+        ].join("\n"),
+        text_size: "normal",
+      });
+    }
+
+    const fallbackLine = normalizeText(normalizedRoute.fallbackLine);
+    if (fallbackLine) {
+      elements.push({
+        tag: "markdown",
+        content: `**如果你想先在飞书里继续**\n- ${escapeCardMarkdown(fallbackLine)}`,
+        text_size: "normal",
+      });
+    }
+  }
+
+  elements.push({
+    tag: "markdown",
+    content: [
+      "**当前状态**",
+      "- 本地插件分流已可用",
+      "- 真实插件链路还没有完成运行期验收",
+      "- 所以我现在会老实地先给你方向建议，不会把它说成实时插件结果",
+    ].join("\n"),
+    text_size: "notation",
+  });
+
+  return {
+    schema: "2.0",
+    config: {
+      wide_screen_mode: true,
+      update_multi: true,
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: title,
+      },
+      template: isAmbiguous ? "orange" : "blue",
+    },
+    body: {
+      elements,
+    },
+  };
+}
+
 function buildStatusPanelCard({
   workspaceRoot,
   codexParams,
+  goal = "",
+  goalState = null,
+  memoryStatus = null,
   modelOptions,
   effortOptions,
   threadId,
@@ -373,6 +427,9 @@ function buildStatusPanelCard({
               tag: "markdown",
               content: [
                 `**当前项目**：\`${escapeCardMarkdown(workspaceRoot)}\``,
+                `\n**项目目标**：${escapeCardMarkdown(goal || "未设置")}`,
+                ...buildGoalProgressLines(goalState),
+                ...buildMemoryProgressLines(memoryStatus),
               ].join(""),
             },
           ],
@@ -571,7 +628,8 @@ function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }) {
   };
 }
 
-function buildHelpCardText() {
+function buildHelpCardText(config = {}) {
+  const instanceLabel = String(config.instanceLabel || "default").trim() || "default";
   const sections = [
     [
       "**直接对话**",
@@ -588,6 +646,28 @@ function buildHelpCardText() {
       "查看当前绑定的项目和正在使用的线程。",
     ],
     [
+      "**环境诊断**",
+      "`/codex doctor`",
+      "查看当前实例、运行系统、Codex CLI 可用性、当前路径可达性和已验证能力状态。",
+    ],
+    [
+      "**项目目标**",
+      "`/goal`",
+      "`/goal <目标内容>`",
+      "`/goal clear`",
+      "为当前绑定项目设置跨线程共享的目标；只在当前实例生效，不跨本机/云端共享。",
+    ],
+    [
+      "**预约提醒**",
+      "`/预约`",
+      "`/预约 列表 今天|明天|全部`",
+      "`/预约 取消 <预约ID>`",
+      "`/预约 修改 <预约ID> 时间=明天下午三点 项目=染发 备注=冷棕色`",
+      "`/预约 客户 张三`",
+      "`/appoint ...`",
+      "也支持直接发自然语言，例如 `张三预约明天下午三点染发，备注冷棕色`；确认后才会真正保存并进入提醒调度。",
+    ],
+    [
       "**查看最近消息**",
       "`/codex message`",
       "查看当前线程最近几轮对话。",
@@ -600,7 +680,7 @@ function buildHelpCardText() {
     [
       "**移除会话项目绑定**",
       "`/codex remove /绝对路径`",
-      "从当前飞书会话中移除指定项目（不能移除当前项目）。",
+      "从当前飞书会话中移除指定项目；如果移除的是当前项目，会自动切换到剩余项目或清空绑定。",
     ],
     [
       "**发送当前项目内文件**",
@@ -656,6 +736,13 @@ function buildHelpCardText() {
 
   return [
     "**Codex IM 使用说明**",
+    `当前实例标签：\`${escapeCardMarkdown(instanceLabel)}\``,
+    "",
+    "**能力边界**",
+    "- 已验证能力以 `/codex doctor` 输出为准。",
+    "- GitHub / Canva / Cloudflare 属于桥背后的 Codex 运行环境能力，不是桥内单独的插件市场。",
+    "- Chrome/browser 任务只有在 `/codex doctor` 明确显示可用时才算支持；否则默认当前实例暂不支持。",
+    "",
     sections.map((section) => section.join("\n")).join("\n\n"),
   ].join("\n\n");
 }
@@ -679,6 +766,8 @@ function listBoundWorkspaces(binding) {
       workspaceRoot,
       isActive: workspaceRoot === activeWorkspaceRoot,
       threadId: String(threadIdByWorkspaceRoot[workspaceRoot] || "").trim(),
+      goal: String(binding?.goalByWorkspaceRoot?.[workspaceRoot] || "").trim(),
+      goalState: normalizeGoalState(binding?.goalStateByWorkspaceRoot?.[workspaceRoot]),
     }));
 }
 
@@ -710,7 +799,9 @@ function buildWorkspaceBindingsCard(items) {
               content: [
                 `${item.isActive ? "🟢 当前项目" : "⚪ 已绑定项目"}`,
                 `\`${escapeCardMarkdown(item.workspaceRoot)}\``,
+                `项目目标：${escapeCardMarkdown(item.goal || "未设置")}`,
                 item.threadId ? "" : "线程：未关联",
+                ...buildGoalProgressLines(item.goalState, { includeSummary: false }),
               ].filter(Boolean).join("\n"),
               text_size: "notation",
             },
@@ -1406,6 +1497,70 @@ function suggestModels(models, rawInput, limit = 3) {
   return merged;
 }
 
+function normalizeGoalState(goalState) {
+  const input = goalState && typeof goalState === "object" ? goalState : {};
+  return {
+    status: normalizeText(input.status),
+    stage: normalizeText(input.stage),
+    nextStep: normalizeText(input.nextStep || input.next_step),
+    summary: normalizeText(input.summary),
+  };
+}
+
+function buildGoalProgressLines(goalState, { includeSummary = true } = {}) {
+  const normalized = normalizeGoalState(goalState);
+  const lines = [];
+  if (normalized.status) {
+    lines.push(`\n目标状态：${escapeCardMarkdown(formatGoalStatusLabel(normalized.status))}`);
+  }
+  if (normalized.stage) {
+    lines.push(`\n当前阶段：${escapeCardMarkdown(normalized.stage)}`);
+  }
+  if (normalized.nextStep) {
+    lines.push(`\n下一步：${escapeCardMarkdown(normalized.nextStep)}`);
+  }
+  if (includeSummary && normalized.summary) {
+    lines.push(`\n阶段摘要：${escapeCardMarkdown(normalized.summary)}`);
+  }
+  return lines;
+}
+
+function buildMemoryProgressLines(memoryStatus) {
+  const status = memoryStatus && typeof memoryStatus === "object" ? memoryStatus : null;
+  if (!status) {
+    return [];
+  }
+  const currentUserCount = Number.isFinite(status.currentUserMemoryCount) ? status.currentUserMemoryCount : 0;
+  const totalCount = Number.isFinite(status.totalMemoryCount) ? status.totalMemoryCount : 0;
+  const lines = [
+    `\n**进化记忆**：${escapeCardMarkdown(status.enabled ? "已启用" : "未启用")}`,
+    `\n**记忆条数**：${escapeCardMarkdown(`当前用户 ${currentUserCount} 条 / 累计 ${totalCount} 条`)}`,
+  ];
+  if (status.profileSummary) {
+    lines.push(`\n**记忆画像**：${escapeCardMarkdown(status.profileSummary)}`);
+  } else if (status.error) {
+    lines.push(`\n**记忆状态**：${escapeCardMarkdown(`读取失败：${status.error}`)}`);
+  }
+  return lines;
+}
+
+function formatGoalStatusLabel(status) {
+  const normalized = normalizeText(status).toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "active") {
+    return "进行中";
+  }
+  if (normalized === "completed") {
+    return "已完成";
+  }
+  if (normalized === "blocked") {
+    return "阻塞中";
+  }
+  return status;
+}
+
 module.exports = {
   buildApprovalCard,
   buildApprovalResolvedCard,
@@ -1417,6 +1572,7 @@ module.exports = {
   buildModelInfoText,
   buildModelListText,
   buildModelValidationErrorText,
+  buildPluginRouteCard,
   buildStatusPanelCard,
   buildEffortInfoText,
   buildEffortListText,

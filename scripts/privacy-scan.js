@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -14,6 +15,8 @@ const SKIP_DIRS = new Set([
 
 const SKIP_FILES = new Set([
   "package-lock.json",
+  "npm-shrinkwrap.json",
+  "privacy-scan.js",
   "scripts/privacy-scan.js",
 ]);
 
@@ -28,6 +31,21 @@ const SKIP_EXTENSIONS = new Set([
   ".gif",
   ".pdf",
 ]);
+
+const PRIVATE_TRACKED_PATHS = [
+  { name: "private-workspace-path", re: /^00-Inbox\// },
+  { name: "private-workspace-path", re: /^10-/ },
+  { name: "private-workspace-path", re: /^40-/ },
+  { name: "private-workspace-path", re: /^50-/ },
+  { name: "private-workspace-path", re: /^60-/ },
+  { name: "private-workspace-path", re: /^70-/ },
+  { name: "private-workspace-path", re: /^99-Archive\// },
+  { name: "private-plugin-state-path", re: /^\.codex-plugin\// },
+  { name: "private-local-helper-path", re: /^stapp\.py$/ },
+  { name: "private-local-helper-path", re: /^requirements\.txt$/ },
+  { name: "private-memory-extension-path", re: /^extensions\/mem0-extension\.js$/ },
+  { name: "private-memory-client-path", re: /^src\/infra\/memory\/mem0-client\.js$/ },
+];
 
 const PATTERNS = [
   { name: "private-persona", re: /\b(Jiao|Mira)\b|予安/g },
@@ -50,6 +68,7 @@ function walk(dir) {
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     const relPath = path.relative(ROOT, fullPath);
+    const normalizedRelPath = relPath.split(path.sep).join("/");
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) {
         files.push(...walk(fullPath));
@@ -62,6 +81,7 @@ function walk(dir) {
     if (
       SKIP_FILES.has(entry.name) ||
       SKIP_FILES.has(relPath) ||
+      SKIP_FILES.has(normalizedRelPath) ||
       SKIP_EXTENSIONS.has(path.extname(entry.name).toLowerCase())
     ) {
       continue;
@@ -73,11 +93,11 @@ function walk(dir) {
 
 function scanFile(relPath) {
   const fullPath = path.join(ROOT, relPath);
+  const findings = [];
   let text = fs.readFileSync(fullPath, "utf8");
   for (const term of ALLOWED_PUBLIC_TERMS) {
     text = text.replaceAll(term, "[allowed-public-owner]");
   }
-  const findings = [];
   for (const pattern of PATTERNS) {
     pattern.re.lastIndex = 0;
     let match;
@@ -91,8 +111,14 @@ function scanFile(relPath) {
 }
 
 function main() {
-  const files = walk(ROOT);
-  const findings = files.flatMap(scanFile);
+  const candidates = listTrackedFiles();
+  const pathFindings = candidates.flatMap(scanTrackedPath);
+  const files = candidates.filter(shouldScanFile);
+  const textFiles = files.filter(isTextFile);
+  const findings = [
+    ...pathFindings,
+    ...textFiles.flatMap(scanFile),
+  ];
   if (findings.length) {
     console.error("Privacy scan failed:");
     for (const finding of findings) {
@@ -100,7 +126,63 @@ function main() {
     }
     process.exit(1);
   }
-  console.log(`Privacy scan passed (${files.length} files checked).`);
+  console.log(`Privacy scan passed (${textFiles.length} tracked text files checked; ${files.length - textFiles.length} binary files skipped).`);
+}
+
+function scanTrackedPath(relPath) {
+  const normalizedRelPath = normalizeRelPath(relPath);
+  const findings = [];
+  for (const rule of PRIVATE_TRACKED_PATHS) {
+    if (rule.re.test(normalizedRelPath)) {
+      findings.push({
+        file: normalizedRelPath,
+        line: 1,
+        name: rule.name,
+        match: normalizedRelPath,
+      });
+    }
+  }
+  return findings;
+}
+
+function listTrackedFiles() {
+  const result = spawnSync("git", ["ls-files", "-z"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  if (result.status === 0 && result.stdout) {
+    return result.stdout
+      .split("\0")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return walk(ROOT).map(normalizeRelPath);
+}
+
+function shouldScanFile(relPath) {
+  const normalizedRelPath = normalizeRelPath(relPath);
+  const baseName = path.basename(normalizedRelPath);
+  if (!fs.existsSync(path.join(ROOT, normalizedRelPath))) {
+    return false;
+  }
+  if (
+    SKIP_FILES.has(baseName) ||
+    SKIP_FILES.has(normalizedRelPath) ||
+    SKIP_EXTENSIONS.has(path.extname(baseName).toLowerCase())
+  ) {
+    return false;
+  }
+  return !normalizedRelPath.split("/").some((part) => SKIP_DIRS.has(part));
+}
+
+function isTextFile(relPath) {
+  const fullPath = path.join(ROOT, relPath);
+  const chunk = fs.readFileSync(fullPath).subarray(0, 8192);
+  return !chunk.includes(0);
+}
+
+function normalizeRelPath(relPath) {
+  return String(relPath || "").split(path.sep).join("/");
 }
 
 main();

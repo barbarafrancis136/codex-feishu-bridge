@@ -1,0 +1,107 @@
+description: Appointment parser baseline eval
+prompts:
+  - "{{input}}"
+providers:
+  - file://provider.js
+tests:
+  - description: explicit absolute create with note
+    vars:
+      input: "Alice预约2030-05-21 15:00 染发 备注冷棕色"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "create"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "true"
+      expected_customer_name: "Alice"
+      expected_service_name: "染发"
+      expected_note_contains: "冷棕色"
+      expected_appointment_iso: "2030-05-21T07:00:00.000Z"
+      expected_reminder_iso: "2030-05-21T01:00:00.000Z"
+  - description: implicit natural language create
+    vars:
+      input: "张三明天下午三点染发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "create"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "true"
+      expected_customer_name: "张三"
+      expected_service_name: "染发"
+      expected_appointment_iso: "2026-05-22T07:00:00.000Z"
+      expected_reminder_iso: "2026-05-22T01:00:00.000Z"
+  - description: relative weekday create
+    vars:
+      input: "李四预约下周二上午10点剪发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "create"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "true"
+      expected_customer_name: "李四"
+      expected_service_name: "剪发"
+      expected_appointment_iso: "2026-05-26T02:00:00.000Z"
+      expected_reminder_iso: "2026-05-26T01:00:00.000Z"
+  - description: same day after 9 uses one hour reminder
+    vars:
+      input: "Alice预约今天下午三点染发"
+      now_iso: "2026-05-21T10:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "create"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "true"
+      expected_customer_name: "Alice"
+      expected_service_name: "染发"
+      expected_appointment_iso: "2026-05-21T07:00:00.000Z"
+      expected_reminder_iso: "2026-05-21T06:00:00.000Z"
+  - description: product discussion should fall through
+    vars:
+      input: "预约功能为什么不能用"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "fallthrough"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "false"
+      expected_ok: "false"
+  - description: missing datetime currently falls through
+    vars:
+      input: "张三预约染发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "fallthrough"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "false"
+      expected_ok: "false"
+  - description: past appointment returns error
+    vars:
+      input: "张三预约2025-05-01 15:00 染发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "error"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "false"
+      expected_message_contains: "时间已经过去"
+  - description: note with punctuation create
+    vars:
+      input: "张三预约明天下午三点染发，备注冷棕色"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_current_route: "create"
+      expected_intent_detected: "true"
+      expected_datetime_detected: "true"
+      expected_ok: "true"
+      expected_customer_name: "张三"
+      expected_service_name: "染发"
+      expected_note_contains: "冷棕色"
+      expected_appointment_iso: "2026-05-22T07:00:00.000Z"
+      expected_reminder_iso: "2026-05-22T01:00:00.000Z"
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://assert.js:gradeAppointmentParse
+      config:
+        passThreshold: 0.85

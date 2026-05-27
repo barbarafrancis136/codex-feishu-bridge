@@ -8,10 +8,10 @@ const RICH_TEXT_MESSAGE_TYPES = new Set([
   "merge_forward",
   "forward",
 ]);
+const NON_TEXT_CONTENT_PREVIEW_CHARS = 8000;
 
 function normalizeFeishuTextEvent(event, config) {
-  const message = event?.message || {};
-  const sender = event?.sender || {};
+  const { message, sender } = resolveFeishuEventEnvelope(event);
   if (message.message_type !== "text") {
     return normalizeFeishuNonTextEvent(message, sender, config);
   }
@@ -28,8 +28,9 @@ function normalizeFeishuTextEvent(event, config) {
     threadKey: message.root_id || "",
     senderId: sender?.sender_id?.open_id || sender?.sender_id?.user_id || "",
     messageId: message.message_id || "",
+    messageType: "text",
     text,
-    command: parseCommand(text),
+    command: resolveTextCommand(text, config),
     receivedAt: new Date().toISOString(),
   };
 }
@@ -40,27 +41,71 @@ function normalizeFeishuNonTextEvent(message, sender, config) {
     return null;
   }
   const attachments = extractFeishuMessageAttachments(messageType, message.content);
-  const text = parseFeishuNonTextMessageText(messageType, message.content);
-  const command = text
-    ? parseCommand(text)
-    : attachments.some((attachment) => attachment?.kind === "image")
-    ? "image_message"
-    : attachments.length
-      ? "attachment_message"
-      : "unsupported_message";
+  const extractedText = parseFeishuNonTextMessageText(messageType, message.content);
+  const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || "";
+  const mergeForwardMeta = extractMergeForwardMeta(messageType, message.content);
+  const command = resolveFeishuNonTextCommand(messageType, extractedText, attachments, config);
+  const text = shouldUseStructuredNonTextText(messageType, extractedText, attachments)
+    ? buildStructuredNonTextMessageText({
+      messageType,
+      rawContent: message.content,
+      extractedText,
+      mergeForwardMeta,
+      chatId: message.chat_id || "",
+      threadKey: message.root_id || "",
+      senderId,
+      messageId: message.message_id || "",
+    })
+    : extractedText;
   return {
     provider: "feishu",
     workspaceId: config.defaultWorkspaceId,
     chatId: message.chat_id || "",
     threadKey: message.root_id || "",
-    senderId: sender?.sender_id?.open_id || sender?.sender_id?.user_id || "",
+    senderId,
     messageId: message.message_id || "",
+    messageType,
     text,
     command,
     attachments,
-    unsupportedMessageType: messageType,
+    ...mergeForwardMeta,
     receivedAt: new Date().toISOString(),
   };
+}
+
+function resolveFeishuEventEnvelope(event) {
+  if (event?.message || event?.sender) {
+    return {
+      message: event?.message || {},
+      sender: event?.sender || {},
+    };
+  }
+  return {
+    message: event?.event?.message || {},
+    sender: event?.event?.sender || {},
+  };
+}
+
+function resolveTextCommand(text, config) {
+  if (isDirectBridgeMode(config)) {
+    return "message";
+  }
+  return parseCommand(text);
+}
+
+function normalizeFeishuForwardedMessageItems(items = []) {
+  const forwardedItems = Array.isArray(items) ? items : [];
+  if (!forwardedItems.length) {
+    return "";
+  }
+  const sections = [];
+  for (const item of forwardedItems) {
+    const block = formatForwardedMessageItem(item);
+    if (block) {
+      sections.push(block);
+    }
+  }
+  return sections.join("\n\n").trim();
 }
 
 function extractCardAction(data) {
@@ -103,6 +148,14 @@ function extractCardAction(data) {
       kind: value.kind,
       action: value.action || "",
       workspaceRoot: value.workspaceRoot || "",
+    };
+  }
+  if (value.kind === "appointment") {
+    return {
+      kind: value.kind,
+      action: value.action || "",
+      draftId: value.draftId || "",
+      chatScopeKey: value.chatScopeKey || "",
     };
   }
   return null;
@@ -220,10 +273,216 @@ function parseFeishuNonTextMessageText(messageType, rawContent) {
   if (messageType === "post") {
     return extractPostPlainText(parsed).trim();
   }
+  if (messageType === "merge_forward") {
+    const forwardedText = normalizeIdentifier(parsed.forwarded_text);
+    if (forwardedText) {
+      return forwardedText;
+    }
+    if (Array.isArray(parsed.forwarded_items)) {
+      const summarized = normalizeFeishuForwardedMessageItems(parsed.forwarded_items);
+      if (summarized) {
+        return summarized;
+      }
+    }
+  }
   if (RICH_TEXT_MESSAGE_TYPES.has(messageType)) {
     return extractRichMessageText(parsed).trim();
   }
   return "";
+}
+
+function extractMergeForwardMeta(messageType, rawContent) {
+  if (messageType !== "merge_forward") {
+    return {};
+  }
+  const parsed = parseFeishuMessageContent(rawContent);
+  const forwardedText = normalizeIdentifier(parsed.forwarded_text);
+  const forwardedItems = Array.isArray(parsed.forwarded_items) ? parsed.forwarded_items : [];
+  const forwardedExpandStatus = normalizeIdentifier(parsed.forwarded_expand_status);
+  const mergeForwardStatus = forwardedExpandStatus || (
+    forwardedText || forwardedItems.length ? "expanded" : "received"
+  );
+  return {
+    mergeForwardStatus,
+    mergeForwardTitle: normalizeIdentifier(parsed.title),
+    mergeForwardSummary: normalizeIdentifier(parsed.summary),
+    mergeForwardExpandNote: normalizeIdentifier(parsed.forwarded_expand_note),
+  };
+}
+
+function resolveFeishuNonTextCommand(messageType, text, attachments, config) {
+  const hasText = Boolean(String(text || "").trim());
+  if (hasText) {
+    // Slash commands should only be executed from direct text/post input.
+    // Forwarded cards and shared entities are user content, not bridge control.
+    return messageType === "post" ? resolveTextCommand(text, config) : "message";
+  }
+  if (attachments.some((attachment) => attachment?.kind === "image")) {
+    return "image_message";
+  }
+  if (attachments.length) {
+    return "attachment_message";
+  }
+  return "message";
+}
+
+function shouldUseStructuredNonTextText(messageType, text, attachments) {
+  if (attachments.length) {
+    return false;
+  }
+  if (messageType === "post" && String(text || "").trim()) {
+    return false;
+  }
+  return true;
+}
+
+function buildStructuredNonTextMessageText({
+  messageType,
+  rawContent,
+  extractedText = "",
+  mergeForwardMeta = {},
+  chatId = "",
+  threadKey = "",
+  senderId = "",
+  messageId = "",
+}) {
+  const lines = [];
+  const normalizedExtractedText = neutralizeBridgeDirectives(String(extractedText || "").trim());
+  if (normalizedExtractedText) {
+    lines.push(normalizedExtractedText);
+    lines.push("");
+  }
+  lines.push("[System note: A Feishu/Lark non-text message arrived through the bridge and should be treated as user-provided context.]");
+  lines.push(`Message type: ${messageType || "unknown"}`);
+  lines.push(`Message ID: ${messageId || "unknown"}`);
+  lines.push(`Chat ID: ${chatId || "unknown"}`);
+  if (threadKey) {
+    lines.push(`Thread key: ${threadKey}`);
+  }
+  if (senderId) {
+    lines.push(`Sender: ${senderId}`);
+  }
+  if (messageType === "merge_forward") {
+    const status = normalizeIdentifier(mergeForwardMeta?.mergeForwardStatus);
+    const title = normalizeIdentifier(mergeForwardMeta?.mergeForwardTitle);
+    const summary = normalizeIdentifier(mergeForwardMeta?.mergeForwardSummary);
+    const expandNote = normalizeIdentifier(mergeForwardMeta?.mergeForwardExpandNote);
+    if (status) {
+      lines.push(`Merge-forward status: ${status}`);
+    }
+    if (title && !normalizedExtractedText.includes(title)) {
+      lines.push(`Merge-forward title: ${title}`);
+    }
+    if (summary) {
+      lines.push(`Merge-forward summary: ${summary}`);
+    }
+    if (expandNote) {
+      lines.push(`Bridge note: ${expandNote}`);
+    }
+  }
+
+  const preview = buildNonTextContentPreview(rawContent);
+  if (preview) {
+    lines.push("");
+    lines.push("Content preview:");
+    lines.push(preview);
+  }
+  return lines.join("\n").trim();
+}
+
+function buildNonTextContentPreview(rawContent) {
+  const parsed = parseMaybeJson(rawContent);
+  const source = parsed || String(rawContent || "").trim();
+  if (!source) {
+    return "";
+  }
+  let text = "";
+  if (typeof source === "string") {
+    text = source;
+  } else {
+    try {
+      text = JSON.stringify(source, null, 2);
+    } catch {
+      text = String(rawContent || "").trim();
+    }
+  }
+  return truncateNonTextPreview(neutralizeBridgeDirectives(text));
+}
+
+function formatForwardedMessageItem(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+  const type = normalizeIdentifier(item.msg_type || item.message_type || item.type) || "unknown";
+  const contentText = extractForwardedItemContentText(item);
+  const senderName = extractForwardedItemSenderName(item);
+  const timestamp = normalizeIdentifier(item.create_time || item.createTime);
+  const lines = [];
+  lines.push(`Forwarded item (${type})`);
+  if (senderName) {
+    lines.push(`Sender: ${senderName}`);
+  }
+  if (timestamp) {
+    lines.push(`Created: ${timestamp}`);
+  }
+  if (contentText) {
+    lines.push("");
+    lines.push(contentText);
+  }
+  return lines.join("\n").trim();
+}
+
+function extractForwardedItemContentText(item) {
+  const rawBody = item?.body?.content;
+  const parsedBody = parseFeishuMessageContent(rawBody);
+  const messageType = normalizeIdentifier(item?.msg_type || item?.message_type || item?.type).toLowerCase();
+  if (messageType === "text") {
+    return neutralizeBridgeDirectives(parseFeishuMessageText(rawBody));
+  }
+  if (messageType === "post") {
+    return neutralizeBridgeDirectives(extractPostPlainText(parsedBody).trim());
+  }
+  if (RICH_TEXT_MESSAGE_TYPES.has(messageType)) {
+    const richText = normalizeFeishuForwardedSummary(parsedBody);
+    if (richText) {
+      return richText;
+    }
+    return neutralizeBridgeDirectives(extractRichMessageText(parsedBody).trim());
+  }
+  const fallback = buildNonTextContentPreview(rawBody);
+  return fallback ? neutralizeBridgeDirectives(fallback) : "";
+}
+
+function normalizeFeishuForwardedSummary(parsedBody) {
+  if (!parsedBody || typeof parsedBody !== "object") {
+    return "";
+  }
+  const summaryText = extractRichMessageText(parsedBody).trim();
+  return summaryText ? neutralizeBridgeDirectives(summaryText) : "";
+}
+
+function extractForwardedItemSenderName(item) {
+  const sender = item?.sender || {};
+  return normalizeIdentifier(
+    sender?.name
+      || sender?.sender_name
+      || sender?.id
+      || sender?.sender_id
+  );
+}
+
+function neutralizeBridgeDirectives(text) {
+  return String(text || "")
+    .replace(/\[\[codex-feishu-send:/g, "[codex-feishu-send:")
+    .replace(/\[\[yuan-feishu-send:/g, "[yuan-feishu-send:");
+}
+
+function truncateNonTextPreview(text) {
+  const source = String(text || "");
+  if (source.length <= NON_TEXT_CONTENT_PREVIEW_CHARS) {
+    return source;
+  }
+  return `${source.slice(0, NON_TEXT_CONTENT_PREVIEW_CHARS)}\n[...truncated...]`;
 }
 
 function extractRichMessageText(parsed) {
@@ -420,10 +679,15 @@ function parseCommand(text) {
   const normalized = text.trim().toLowerCase();
   const prefixes = ["/codex "];
   const exactPrefixes = ["/codex"];
+  const goalPrefixes = ["/goal "];
+  const goalExactPrefixes = ["/goal"];
+  const appointmentPrefixes = ["/预约 ", "/appoint "];
+  const appointmentExactPrefixes = ["/预约", "/appoint"];
 
   const exactCommands = {
     stop: ["stop"],
     where: ["where"],
+    doctor: ["doctor"],
     inspect_message: ["message"],
     help: ["help"],
     workspace: ["workspace"],
@@ -434,6 +698,10 @@ function parseCommand(text) {
     effort: ["effort"],
     access: ["access"],
     profile: ["profile"],
+    skill: ["skill"],
+    plugin: ["plugin"],
+    score: ["score"],
+    eval: ["eval"],
     approve: ["approve", "approve workspace"],
     reject: ["reject"],
   };
@@ -468,17 +736,48 @@ function parseCommand(text) {
   if (matchesPrefixCommand(normalized, "profile")) {
     return "profile";
   }
+  if (matchesPrefixCommand(normalized, "skill")) {
+    return "skill";
+  }
+  if (matchesPrefixCommand(normalized, "plugin")) {
+    return "plugin";
+  }
+  if (matchesPrefixCommand(normalized, "score")) {
+    return "score";
+  }
+  if (matchesPrefixCommand(normalized, "eval")) {
+    return "eval";
+  }
+  if (normalized.startsWith("/codexplugin")) {
+    return "plugin";
+  }
   if (prefixes.some((prefix) => normalized.startsWith(prefix))) {
     return "unknown_command";
   }
   if (exactPrefixes.includes(normalized)) {
     return "unknown_command";
   }
+  if (goalExactPrefixes.includes(normalized)) {
+    return "goal";
+  }
+  if (goalPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+    return "goal";
+  }
+  if (appointmentExactPrefixes.includes(normalized)) {
+    return "appointment";
+  }
+  if (appointmentPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+    return "appointment";
+  }
   if (text.trim()) {
     return "message";
   }
 
   return "";
+}
+
+function isDirectBridgeMode(config = {}) {
+  return String(config.bridgeMode || "thin").trim().toLowerCase() === "direct";
 }
 
 function matchesExactCommand(text, suffixes) {
@@ -516,6 +815,7 @@ module.exports = {
   extractCardAction,
   mapCodexMessageToImEvent,
   normalizeCardActionContext,
+  normalizeFeishuForwardedMessageItems,
   normalizeFeishuTextEvent,
 };
 

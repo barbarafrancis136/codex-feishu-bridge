@@ -1,0 +1,56 @@
+description: Appointment parser growth eval
+prompts:
+  - "{{input}}"
+providers:
+  - file://provider.js
+tests:
+  - description: spaced month should not pollute service name
+    vars:
+      input: "张颍蕊预约5 月24号下午两点半染头发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_suggested_route: "create"
+      expected_customer_name: "张颍蕊"
+      expected_service_name: "染头发"
+      expected_appointment_iso: "2026-05-24T06:30:00.000Z"
+      expected_reminder_iso: "2026-05-24T01:00:00.000Z"
+  - description: missing time should become clarify instead of quiet fallthrough
+    vars:
+      input: "张三预约染发"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_suggested_route: "clarify"
+      expected_customer_name: "张三"
+      expected_service_name: "染发"
+  - description: missing time with note should still capture entities
+    vars:
+      input: "Alice预约烫发，备注想要自然卷"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_suggested_route: "clarify"
+      expected_customer_name: "Alice"
+      expected_service_name: "烫发"
+      expected_note_contains: "自然卷"
+  - description: product discussion should still avoid interception
+    vars:
+      input: "预约功能为什么不能用"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_suggested_route: "fallthrough"
+  - description: control case for healthy create path
+    vars:
+      input: "张三预约明天下午三点染发，备注冷棕色"
+      now_iso: "2026-05-21T08:00:00+08:00"
+      timezone: "Asia/Shanghai"
+      expected_suggested_route: "create"
+      expected_customer_name: "张三"
+      expected_service_name: "染发"
+      expected_note_contains: "冷棕色"
+      expected_appointment_iso: "2026-05-22T07:00:00.000Z"
+      expected_reminder_iso: "2026-05-22T01:00:00.000Z"
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://assert.js:gradeAppointmentParse
+      config:
+        passThreshold: 0.85

@@ -1,5 +1,6 @@
 const { spawn } = require("child_process");
 const os = require("os");
+const path = require("path");
 const WebSocket = require("ws");
 const { createLogger } = require("../../shared/logger");
 
@@ -57,7 +58,7 @@ class CodexRpcClient {
       try {
         const spawnSpec = buildSpawnSpec(command, this.appServerProfile);
         child = spawn(spawnSpec.command, spawnSpec.args, {
-          env: { ...this.env },
+          env: buildCodexChildEnv(this.env),
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
         });
@@ -221,6 +222,18 @@ class CodexRpcClient {
     workspaceRoot = "",
   }) {
     const input = buildTurnInputPayload(text, attachments);
+    const attachmentRoots = collectAttachmentRoots(attachments);
+    logger.info("prepared turn input", summarizeTurnInput({
+      threadId,
+      text,
+      attachments,
+      input,
+      workspaceRoot,
+      model,
+      effort,
+      accessMode,
+      attachmentRoots,
+    }));
     return threadId
       ? this.sendRequest(
         "turn/start",
@@ -231,6 +244,7 @@ class CodexRpcClient {
           effort,
           accessMode,
           workspaceRoot,
+          attachmentRoots,
         })
       )
       : this.sendRequest("thread/start", { input });
@@ -570,6 +584,14 @@ function buildCodexCommandCandidates(configuredCommand) {
   return [DEFAULT_CODEX_COMMAND];
 }
 
+function buildCodexChildEnv(env = process.env) {
+  const childEnv = { ...env };
+  if (!normalizeNonEmptyString(childEnv.TERM) || normalizeNonEmptyString(childEnv.TERM) === "dumb") {
+    childEnv.TERM = "xterm-256color";
+  }
+  return childEnv;
+}
+
 function buildSpawnSpec(command, appServerProfile = "") {
   const normalizedProfile = normalizeNonEmptyString(appServerProfile);
   if (IS_WINDOWS) {
@@ -650,12 +672,12 @@ function normalizeImageAttachments(attachments) {
     }));
 }
 
-function buildTurnStartParams({ threadId, input, model, effort, accessMode, workspaceRoot }) {
+function buildTurnStartParams({ threadId, input, model, effort, accessMode, workspaceRoot, attachmentRoots = [] }) {
   const params = { threadId, input };
   const normalizedModel = normalizeNonEmptyString(model);
   const normalizedEffort = normalizeNonEmptyString(effort);
   const normalizedAccessMode = normalizeAccessMode(accessMode);
-  const executionPolicies = buildExecutionPolicies(normalizedAccessMode, workspaceRoot);
+  const executionPolicies = buildExecutionPolicies(normalizedAccessMode, workspaceRoot, attachmentRoots);
   if (normalizedModel) {
     params.model = normalizedModel;
   }
@@ -678,7 +700,7 @@ function normalizeAccessMode(value) {
   return normalized === "full-access" ? normalized : "";
 }
 
-function buildExecutionPolicies(accessMode, workspaceRoot) {
+function buildExecutionPolicies(accessMode, workspaceRoot, attachmentRoots = []) {
   if (accessMode === "full-access") {
     return {
       approvalPolicy: "never",
@@ -686,10 +708,14 @@ function buildExecutionPolicies(accessMode, workspaceRoot) {
     };
   }
   const normalizedWorkspaceRoot = normalizeNonEmptyString(workspaceRoot);
-  const sandboxPolicy = normalizedWorkspaceRoot
+  const writableRoots = uniqueNonEmptyStrings([
+    normalizedWorkspaceRoot,
+    ...attachmentRoots,
+  ]);
+  const sandboxPolicy = writableRoots.length
     ? {
       type: "workspaceWrite",
-      writableRoots: [normalizedWorkspaceRoot],
+      writableRoots,
       networkAccess: true,
     }
     : {
@@ -700,6 +726,41 @@ function buildExecutionPolicies(accessMode, workspaceRoot) {
     approvalPolicy: "on-request",
     sandboxPolicy,
   };
+}
+
+function collectAttachmentRoots(attachments) {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  return uniqueNonEmptyStrings(attachments.map((attachment) => {
+    const filePath = normalizeNonEmptyString(attachment?.filePath);
+    return filePath ? path.dirname(filePath) : "";
+  }));
+}
+
+function summarizeTurnInput({ threadId, text, attachments, input, workspaceRoot, model, effort, accessMode, attachmentRoots }) {
+  const normalizedText = normalizeNonEmptyString(text);
+  const normalizedAttachments = Array.isArray(attachments) ? attachments : [];
+  return {
+    threadId: normalizeNonEmptyString(threadId),
+    workspaceRoot: normalizeNonEmptyString(workspaceRoot),
+    model: normalizeNonEmptyString(model),
+    effort: normalizeNonEmptyString(effort),
+    accessMode: normalizeNonEmptyString(accessMode),
+    textChars: normalizedText.length,
+    inputItemCount: Array.isArray(input) ? input.length : 0,
+    localImageCount: Array.isArray(input) ? input.filter((item) => item?.type === "localImage").length : 0,
+    attachmentCount: normalizedAttachments.length,
+    attachmentKinds: normalizedAttachments.map((attachment) => attachment?.kind || "attachment"),
+    attachmentPaths: normalizedAttachments.map((attachment) => normalizeNonEmptyString(attachment?.filePath)).filter(Boolean).slice(0, 3),
+    attachmentRoots,
+  };
+}
+
+function uniqueNonEmptyStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => normalizeNonEmptyString(value))
+    .filter(Boolean))];
 }
 
 module.exports = { CodexRpcClient };

@@ -213,7 +213,14 @@ function extractTurnIdFromRunKey(runKey) {
 }
 
 function extractCreatedMessageId(response) {
-  return response?.data?.message_id || "";
+  return normalizeIdentifier(
+    response?.data?.message_id
+    || response?.data?.messageId
+    || response?.message_id
+    || response?.messageId
+    || response?.result?.message_id
+    || response?.result?.messageId
+  );
 }
 
 function extractThreadsFromListResponse(response) {
