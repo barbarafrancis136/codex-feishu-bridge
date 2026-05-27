@@ -1,6 +1,6 @@
 {
   "name": "codex-feishu-bridge",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "A focused Feishu/Lark bridge for local Codex.",
   "license": "MIT",
   "repository": {
