@@ -50,7 +50,8 @@ Thumbs.db
 /requirements.txt
 /extensions/.data/
 /extensions/mem0-extension.js
-/src/infra/memory/
+/src/infra/memory/*
+!/src/infra/memory/evolving-memory-store.js
 /scripts/check-mem0.js
 /prompts/morning-briefing-smoke.md
 /prompts/reply-style-structured.md

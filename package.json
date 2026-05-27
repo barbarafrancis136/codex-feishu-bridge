@@ -27,7 +27,7 @@
     "docs",
     "src/**/*.js",
     "!src/**/*.bak*",
-    "!src/infra/memory/**",
+    "!src/infra/memory/mem0-client.js",
     "CHANGELOG.md",
     "README.md",
     ".env.example"
