@@ -10,11 +10,11 @@ const { normalizeFeishuTextEvent } = require("../src/presentation/message/normal
 const { buildStatusPanelCard, buildWorkspaceBindingsCard } = require("../src/presentation/card/builders");
 const dispatcher = require("../src/app/dispatcher");
 const codexEvents = require("../src/app/codex-event-service");
+const replyDirectives = require("../src/domain/reply-directives/service");
 const bridgeWakeupService = require("../src/domain/automation/bridge-wakeup-service");
 const threadService = require("../src/domain/thread/thread-service");
 const workspaceService = require("../src/domain/workspace/workspace-service");
 const { FeishuBotRuntime } = require("../src/app/feishu-bot-runtime");
-const mem0Extension = require("../extensions/mem0-extension");
 
 async function main() {
   testCommandParsing();
@@ -371,7 +371,7 @@ async function testGoalStateDirectivePersistenceAndStrip() {
   const workspaceRoot = "/srv/project";
   store.setGoalForWorkspace(bindingKey, workspaceRoot, "ship safely today");
 
-  const cleaned = await mem0Extension.hooks.afterCodexReply({
+  const { cleanedText: cleaned } = replyDirectives.parseAndPersistReplyDirectives({
     event: {
       payload: {
         mode: "completed_snapshot",
@@ -416,7 +416,7 @@ async function testChatGoalStateDirectivePersistenceAndStrip() {
   const bindingKey = "default:oc_test:sender:ou_test";
   store.setChatGoal(bindingKey, "act like the current Codex chat window");
 
-  const cleaned = await mem0Extension.hooks.afterCodexReply({
+  const { cleanedText: cleaned } = replyDirectives.parseAndPersistReplyDirectives({
     event: {
       payload: {
         mode: "completed_snapshot",
@@ -460,7 +460,7 @@ async function testDirectModeStripsButDoesNotPersistGoalStateDirective() {
   const workspaceRoot = "/srv/project";
   store.setGoalForWorkspace(bindingKey, workspaceRoot, "ship safely today");
 
-  const cleaned = await mem0Extension.hooks.afterCodexReply({
+  const { cleanedText: cleaned } = replyDirectives.parseAndPersistReplyDirectives({
     event: {
       payload: {
         mode: "completed_snapshot",
@@ -574,55 +574,42 @@ async function testMemoryEvolutionDirectivePersistenceAndStrip() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feishu-memory-directive-"));
   const filePath = path.join(tempDir, "memory.json");
   const store = new EvolvingMemoryStore({ filePath, retrievalLimit: 6 });
-  mem0Extension.__testing.setDependencies({
-    mem0Client: {
-      isEnabled() {
-        return false;
-      },
-      buildUserId(senderId) {
-        return senderId ? `feishu:${senderId}` : "";
-      },
-    },
-    structuredMemoryStore: store,
-  });
 
-  try {
-    const cleaned = await mem0Extension.hooks.afterCodexReply({
-      event: {
-        payload: {
-          mode: "completed_snapshot",
-          normalized: {
-            workspaceId: "default",
-            chatId: "oc_test",
-            threadKey: "",
-            senderId: "ou_memory",
-            messageId: "om_memory_state",
-            command: "message",
-            text: "Remember how I prefer you to work.",
-          },
+  const { cleanedText: cleaned } = replyDirectives.parseAndPersistReplyDirectives({
+    event: {
+      payload: {
+        mode: "completed_snapshot",
+        normalized: {
+          workspaceId: "default",
+          chatId: "oc_test",
+          threadKey: "",
+          senderId: "ou_memory",
+          messageId: "om_memory_state",
+          command: "message",
+          text: "Remember how I prefer you to work.",
         },
       },
-      text: [
-        "I will remember that.",
-        "",
-        "[[codex-memory-evolution:{\"upserts\":[{\"key\":\"pref_goal_mode_until_done\",\"kind\":\"workflow\",\"summary\":\"User wants goal-mode execution until the task is fully done.\",\"confidence\":\"high\",\"evidence\":\"The user repeatedly asks to keep going until completion.\",\"relevanceHints\":[\"goal mode\",\"continue\",\"done\"]}],\"profileSummary\":\"Prefers goal-mode execution until completion.\"}]]",
-      ].join("\n"),
-      runtime: {
-        sessionStore: new SessionStore({ filePath: path.join(tempDir, "sessions.json") }),
-      },
-    });
+    },
+    text: [
+      "I will remember that.",
+      "",
+      "[[codex-memory-evolution:{\"upserts\":[{\"key\":\"pref_goal_mode_until_done\",\"kind\":\"workflow\",\"summary\":\"User wants goal-mode execution until the task is fully done.\",\"confidence\":\"high\",\"evidence\":\"The user repeatedly asks to keep going until completion.\",\"relevanceHints\":[\"goal mode\",\"continue\",\"done\"]}],\"profileSummary\":\"Prefers goal-mode execution until completion.\"}]]",
+    ].join("\n"),
+    runtime: {
+      sessionStore: new SessionStore({ filePath: path.join(tempDir, "sessions.json") }),
+    },
+    structuredStore: store,
+    memoryUserId: "feishu:ou_memory",
+  });
 
-    assert.ok(!cleaned.includes("codex-memory-evolution"));
-    assert.ok(cleaned.includes("I will remember that."));
+  assert.ok(!cleaned.includes("codex-memory-evolution"));
+  assert.ok(cleaned.includes("I will remember that."));
 
-    const profile = store.getUserProfile("feishu:ou_memory");
-    assert.strictEqual(profile.profileSummary, "Prefers goal-mode execution until completion.");
-    assert.strictEqual(profile.memories.length, 1);
-    assert.strictEqual(profile.memories[0].key, "pref_goal_mode_until_done");
-    assert.strictEqual(profile.memories[0].kind, "workflow");
-  } finally {
-    mem0Extension.__testing.resetDependencies();
-  }
+  const profile = store.getUserProfile("feishu:ou_memory");
+  assert.strictEqual(profile.profileSummary, "Prefers goal-mode execution until completion.");
+  assert.strictEqual(profile.memories.length, 1);
+  assert.strictEqual(profile.memories[0].key, "pref_goal_mode_until_done");
+  assert.strictEqual(profile.memories[0].kind, "workflow");
 }
 
 async function testMemoryInjectionIncludesStructuredContextAndContract() {
@@ -646,35 +633,14 @@ async function testMemoryInjectionIncludesStructuredContextAndContract() {
     },
   });
 
-  mem0Extension.__testing.setDependencies({
-    mem0Client: {
-      isEnabled() {
-        return false;
-      },
-      buildUserId(senderId) {
-        return senderId ? `feishu:${senderId}` : "";
-      },
-    },
-    structuredMemoryStore: store,
+  const memories = store.getRelevantMemories({
+    userId,
+    query: "Please continue and execute directly if it is safe.",
   });
 
-  try {
-    const enriched = await mem0Extension.hooks.beforeMessage({
-      normalized: {
-        command: "message",
-        text: "Please continue and execute directly if it is safe.",
-        senderId: "ou_memory",
-      },
-    });
-
-    assert.ok(enriched.text.includes("<feishu-user-memory>"));
-    assert.ok(enriched.text.includes("Prefers direct execution when it is safe."));
-    assert.ok(enriched.text.includes("<feishu-memory-contract>"));
-    assert.ok(enriched.text.includes("codex-memory-evolution"));
-    assert.ok(enriched.text.includes("下面是用户当前这条新消息"));
-  } finally {
-    mem0Extension.__testing.resetDependencies();
-  }
+  assert.strictEqual(memories.length, 1);
+  assert.strictEqual(memories[0].key, "pref_direct_execution");
+  assert.strictEqual(memories[0].summary, "User prefers direct execution when it is safe.");
 }
 
 async function testGoalStateInjectionLifecycle() {

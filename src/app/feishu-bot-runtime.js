@@ -47,6 +47,7 @@ const approvalRuntime = require("../domain/approval/approval-service");
 const runtimeState = require("../domain/session/binding-context");
 const threadRuntime = require("../domain/thread/thread-service");
 const workspaceRuntime = require("../domain/workspace/workspace-service");
+const replyDirectives = require("../domain/reply-directives/service");
 const runtimeExtensions = require("./runtime-extensions");
 const eventsRuntime = require("./codex-event-service");
 const approvalPolicyRuntime = require("../domain/approval/approval-policy");
@@ -804,16 +805,28 @@ class FeishuBotRuntime {
 
   async runAfterCodexReplyHook(args) {
     const hook = this.extensions?.hooks?.afterCodexReply;
+    let text = String(args?.text || "");
     if (typeof hook !== "function") {
-      return String(args?.text || "");
+      return this.applyCoreReplyDirectives(args, text);
     }
     try {
       const result = await hook(args);
-      return typeof result === "string" ? result : String(args?.text || "");
+      text = typeof result === "string" ? result : text;
     } catch (error) {
       logger.warn("afterCodexReply hook failed", { error });
-      return String(args?.text || "");
     }
+    return this.applyCoreReplyDirectives(args, text);
+  }
+
+  applyCoreReplyDirectives(args, text) {
+    if (String(args?.event?.payload?.mode || "") !== "completed_snapshot") {
+      return String(text || "");
+    }
+    return replyDirectives.parseAndPersistReplyDirectives({
+      event: args?.event,
+      runtime: this,
+      text,
+    }).cleanedText;
   }
 
   async runApprovalRequestHook(args) {
