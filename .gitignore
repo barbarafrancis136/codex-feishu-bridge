@@ -13,9 +13,34 @@ coverage/
 dist/
 *.tgz
 *.tar.gz
+.deploy/
+generated/
+.state/
+.codex-feishu-attachments/
+.codex-plugin/
+.env.backup*
+.env.bak*
+probe-*.jpg
+test-vision.jpg
+bridge-restart.*.log
 
 .DS_Store
 Thumbs.db
 /.idea/
 /sessions.json
 .runtime/
+
+# Private local workspaces must not enter the public bridge core.
+/00-Inbox/
+/10-*/
+/40-*/
+/50-*/
+/60-*/
+/70-*/
+/99-Archive/
+/stapp.py
+/requirements.txt
+/extensions/.data/
+/extensions/mem0-extension.js
+/src/infra/memory/
+/scripts/check-mem0.js
